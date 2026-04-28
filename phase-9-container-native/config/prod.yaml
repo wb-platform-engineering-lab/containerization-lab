@@ -1,0 +1,5 @@
+# Production environment config — mounted at /etc/nexio/config.yaml in prod
+# Same image as dev, different config.
+
+service_name: nexio-api
+max_events_returned: 20

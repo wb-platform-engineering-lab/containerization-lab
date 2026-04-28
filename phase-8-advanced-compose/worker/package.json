@@ -1,0 +1,12 @@
+{
+  "name": "nexio-worker",
+  "version": "0.1.0",
+  "description": "Nexio event queue worker",
+  "main": "worker.js",
+  "scripts": {
+    "start": "node worker.js"
+  },
+  "dependencies": {
+    "redis": "^4.6.13"
+  }
+}

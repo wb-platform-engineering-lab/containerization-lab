@@ -1,0 +1,76 @@
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: nexio-postgres
+    environment:
+      POSTGRES_DB: nexio
+      POSTGRES_USER: nexio
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexio -d nexio"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  redis:
+    image: redis:7-alpine
+    container_name: nexio-redis
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: ./api
+    container_name: nexio-api
+    ports:
+      - "5000:5000"
+    environment:
+      DATABASE_URL: postgresql://nexio:${POSTGRES_PASSWORD}@postgres:5432/nexio
+      REDIS_URL: redis://redis:6379
+      CONFIG_PATH: /etc/nexio/config.yaml
+    volumes:
+      # Mount config read-only — image is never rebuilt for a config change
+      - ./config/dev.yaml:/etc/nexio/config.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+    # Give in-flight requests time to drain before hard-killing
+    stop_grace_period: 30s
+    restart: on-failure
+
+  worker:
+    build: ./worker
+    container_name: nexio-worker
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+    stop_grace_period: 10s
+    restart: on-failure
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  backend:
+    driver: bridge

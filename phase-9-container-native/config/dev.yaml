@@ -1,0 +1,5 @@
+# Dev environment config — mounted into the container at /etc/nexio/config.yaml
+# The image is identical across environments. Only this file changes.
+
+service_name: nexio-api-dev
+max_events_returned: 50

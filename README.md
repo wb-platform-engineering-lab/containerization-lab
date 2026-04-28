@@ -54,11 +54,11 @@ Each phase is motivated by a real containerization pain that emerged as Nexio sc
 | 3 | Production-Ready Images | Intermediate | 3–4 hrs | ✅ Complete |
 | 4 | BuildKit & Advanced Build Patterns | Intermediate | 3–4 hrs | ✅ Complete |
 | 5 | Container Security Scanning & Signing | Intermediate–Advanced | 3–4 hrs | ✅ Complete |
-| 6 | Registry & Image Lifecycle Management | Advanced | 2–3 hrs | ⬜ Not started |
-| 7 | Runtime Security & Hardening | Advanced | 3–4 hrs | ⬜ Not started |
-| 8 | Advanced Compose Patterns | Advanced | 2–3 hrs | ⬜ Not started |
-| 9 | Container-Native Application Design | Expert | 3–4 hrs | ⬜ Not started |
-| 10 | Capstone — Production Pipeline | Expert | 4–6 hrs | ⬜ Not started |
+| 6 | Registry & Image Lifecycle Management | Advanced | 2–3 hrs | ✅ Complete |
+| 7 | Runtime Security & Hardening | Advanced | 3–4 hrs | ✅ Complete |
+| 8 | Advanced Compose Patterns | Advanced | 2–3 hrs | ✅ Complete |
+| 9 | Container-Native Application Design | Expert | 3–4 hrs | ✅ Complete |
+| 10 | Capstone — Production Pipeline | Expert | 4–6 hrs | ✅ Complete |
 
 ---
 
@@ -98,8 +98,32 @@ Each phase is motivated by a real containerization pain that emerged as Nexio sc
 │   ├── README.md
 │   ├── .github/workflows/scan-sign.yml
 │   └── app/
-├── phase-6-registry/              (coming soon)
-└── ...
+├── phase-6-registry/
+│   ├── README.md
+│   └── app/
+├── phase-7-runtime-security/
+│   ├── README.md
+│   ├── seccomp/nexio-seccomp.json
+│   └── app/
+├── phase-8-advanced-compose/
+│   ├── README.md
+│   ├── docker-compose.yml
+│   ├── docker-compose.override.yml
+│   ├── docker-compose.prod.yml
+│   ├── api/
+│   └── worker/
+├── phase-9-container-native/
+│   ├── README.md
+│   ├── docker-compose.yml
+│   ├── config/
+│   │   ├── dev.yaml
+│   │   └── prod.yaml
+│   ├── api/
+│   └── worker/
+└── phase-10-capstone/
+    ├── README.md
+    ├── .github/workflows/production-pipeline.yml
+    └── app/
 ```
 
 ---
