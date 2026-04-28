@@ -37,6 +37,7 @@ Each phase is motivated by a real containerization pain that emerged as Nexio sc
 | 4 | 15 | BuildKit cache isn't shared — every build re-downloads dependencies |
 | 5 | 25 | No one can prove a shipped image hasn't been tampered with |
 | 6 | 40 | Images pile up in the registry — $300/month in storage |
+| 6b | 40 | Enterprise customer requires on-prem image storage with data residency |
 | 7 | 60 | Pentest report: containers run as root with full Linux capabilities |
 | 8 | 80 | Local dev drifts from production — bugs only appear in CI |
 | 9 | 100+ | Config is baked into images — can't promote the same artifact across envs |
@@ -55,6 +56,7 @@ Each phase is motivated by a real containerization pain that emerged as Nexio sc
 | 4 | BuildKit & Advanced Build Patterns | Intermediate | 3–4 hrs | ✅ Complete |
 | 5 | Container Security Scanning & Signing | Intermediate–Advanced | 3–4 hrs | ✅ Complete |
 | 6 | Registry & Image Lifecycle Management | Advanced | 2–3 hrs | ✅ Complete |
+| 6b | Self-Hosted Registry with Harbor | Advanced | 3–4 hrs | ✅ Complete |
 | 7 | Runtime Security & Hardening | Advanced | 3–4 hrs | ✅ Complete |
 | 8 | Advanced Compose Patterns | Advanced | 2–3 hrs | ✅ Complete |
 | 9 | Container-Native Application Design | Expert | 3–4 hrs | ✅ Complete |
@@ -100,6 +102,10 @@ Each phase is motivated by a real containerization pain that emerged as Nexio sc
 │   └── app/
 ├── phase-6-registry/
 │   ├── README.md
+│   └── app/
+├── phase-6b-harbor/
+│   ├── README.md
+│   ├── harbor/harbor.yml
 │   └── app/
 ├── phase-7-runtime-security/
 │   ├── README.md

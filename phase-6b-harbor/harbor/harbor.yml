@@ -1,0 +1,74 @@
+# Harbor configuration for local development
+# Generated from the official harbor.yml template — adjusted for HTTP-only local use.
+#
+# IMPORTANT: This config is intentionally HTTP-only for local development.
+# Production deployments MUST use HTTPS. See production considerations in README.
+
+# The hostname Harbor will be accessible at.
+# For local dev: localhost
+# For production: your-registry.company.com
+hostname: localhost
+
+# HTTP — local dev only
+http:
+  port: 8080
+
+# HTTPS — comment out for local dev, required in production
+# https:
+#   port: 443
+#   certificate: /your/certificate/path
+#   private_key: /your/private/key/path
+
+# Default admin password — CHANGE THIS in production
+harbor_admin_password: Harbor12345
+
+# Secret key for encryption of passwords in the database
+# Must be a string of 16 chars, and must not be changed after Harbor is initialized
+secret_key: not-a-secret-key!
+
+# Database configuration
+database:
+  password: root123
+  max_idle_conns: 100
+  max_open_conns: 900
+  conn_max_lifetime: 5m
+
+# Where Harbor stores data (registry layers, job logs, etc.)
+data_volume: /data
+
+# Trivy vulnerability scanner — enabled by default
+trivy:
+  # Do not report unfixed vulnerabilities
+  ignore_unfixed: false
+  # Update the Trivy DB on startup
+  skip_update: false
+  # Use the Trivy DB for offline scanning (no internet access during scan)
+  offline_scan: false
+  # Which scanners to use
+  security_check: vuln
+  # Allow insecure registries (for pulling base images in air-gapped envs)
+  insecure: false
+
+# Job service — handles async work (replication, GC, retention, scanning)
+jobservice:
+  max_job_workers: 10
+  logger_sweeper_duration: 1   # days
+
+# Notification webhooks
+notification:
+  webhook_job_max_retry: 3
+  webhook_job_http_client_timeout: 3  # seconds
+
+# Logging
+log:
+  level: info
+  local:
+    rotate_count: 50
+    rotate_size: 200m
+    location: /var/log/harbor
+
+# Chart museum (Helm chart storage) — disabled, not needed for this lab
+chart:
+  absolute_url: disabled
+
+_version: 2.11.0
