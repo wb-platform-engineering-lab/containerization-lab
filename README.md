@@ -50,10 +50,10 @@ Each phase is motivated by a real containerization pain that emerged as Nexio sc
 |---|---|---|---|---|
 | 0 | Your First Container | Beginner | 1–2 hrs | ✅ Complete |
 | 1 | Multi-Stage Builds & Image Optimization | Beginner | 2–3 hrs | ✅ Complete |
-| 2 | Multi-Container Apps with Docker Compose | Beginner–Intermediate | 2–3 hrs | ⬜ Not started |
-| 3 | Production-Ready Images | Intermediate | 3–4 hrs | ⬜ Not started |
-| 4 | BuildKit & Advanced Build Patterns | Intermediate | 3–4 hrs | ⬜ Not started |
-| 5 | Container Security Scanning & Signing | Intermediate–Advanced | 3–4 hrs | ⬜ Not started |
+| 2 | Multi-Container Apps with Docker Compose | Beginner–Intermediate | 2–3 hrs | ✅ Complete |
+| 3 | Production-Ready Images | Intermediate | 3–4 hrs | ✅ Complete |
+| 4 | BuildKit & Advanced Build Patterns | Intermediate | 3–4 hrs | ✅ Complete |
+| 5 | Container Security Scanning & Signing | Intermediate–Advanced | 3–4 hrs | ✅ Complete |
 | 6 | Registry & Image Lifecycle Management | Advanced | 2–3 hrs | ⬜ Not started |
 | 7 | Runtime Security & Hardening | Advanced | 3–4 hrs | ⬜ Not started |
 | 8 | Advanced Compose Patterns | Advanced | 2–3 hrs | ⬜ Not started |
@@ -82,7 +82,23 @@ Each phase is motivated by a real containerization pain that emerged as Nexio sc
 │       ├── app.py
 │       └── requirements.txt
 ├── phase-2-compose/               (coming soon)
-├── phase-2-compose/               (coming soon)
+├── phase-2-compose/
+│   ├── README.md
+│   ├── docker-compose.yml
+│   ├── .env.example
+│   ├── api/
+│   └── worker/
+├── phase-3-production-ready/
+│   ├── README.md
+│   └── app/
+├── phase-4-buildkit/
+│   ├── README.md
+│   └── app/
+├── phase-5-scanning-signing/
+│   ├── README.md
+│   ├── .github/workflows/scan-sign.yml
+│   └── app/
+├── phase-6-registry/              (coming soon)
 └── ...
 ```
 
