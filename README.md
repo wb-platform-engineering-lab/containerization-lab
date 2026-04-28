@@ -49,7 +49,7 @@ Each phase is motivated by a real containerization pain that emerged as Nexio sc
 | Phase | Topic | Skill Level | Est. Time | Status |
 |---|---|---|---|---|
 | 0 | Your First Container | Beginner | 1–2 hrs | ✅ Complete |
-| 1 | Multi-Stage Builds & Image Optimization | Beginner | 2–3 hrs | ⬜ Not started |
+| 1 | Multi-Stage Builds & Image Optimization | Beginner | 2–3 hrs | ✅ Complete |
 | 2 | Multi-Container Apps with Docker Compose | Beginner–Intermediate | 2–3 hrs | ⬜ Not started |
 | 3 | Production-Ready Images | Intermediate | 3–4 hrs | ⬜ Not started |
 | 4 | BuildKit & Advanced Build Patterns | Intermediate | 3–4 hrs | ⬜ Not started |
@@ -74,7 +74,14 @@ Each phase is motivated by a real containerization pain that emerged as Nexio sc
 │       ├── Dockerfile
 │       ├── app.py
 │       └── requirements.txt
-├── phase-1-multistage-builds/     (coming soon)
+├── phase-1-multistage-builds/
+│   ├── README.md
+│   └── app/
+│       ├── Dockerfile
+│       ├── .dockerignore
+│       ├── app.py
+│       └── requirements.txt
+├── phase-2-compose/               (coming soon)
 ├── phase-2-compose/               (coming soon)
 └── ...
 ```
