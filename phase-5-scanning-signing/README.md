@@ -204,19 +204,71 @@ curl -sL https://github.com/sigstore/cosign/releases/latest/download/cosign-linu
 cosign version
 ```
 
-### Step 2: Tag and push the image to a registry
+### Step 2: Generate a GitHub Personal Access Token for GHCR
 
-Keyless signing requires the image to be in a registry (not just local). If you do not have GHCR access, use Docker Hub:
+GHCR (GitHub Container Registry) uses Personal Access Tokens (PATs) for authentication — not your GitHub password. You need a token with the right scopes before `docker login` will work.
+
+**Create the token:**
+
+1. Go to **github.com → Settings** (your profile, top-right avatar → Settings)
+2. Scroll down to **Developer settings** (bottom of the left sidebar)
+3. Click **Personal access tokens → Tokens (classic)**
+4. Click **Generate new token → Generate new token (classic)**
+5. Give it a descriptive name: `ghcr-containerization-lab`
+6. Set **Expiration** to 30 days (enough for this lab)
+7. Select these scopes:
+
+   | Scope | Why |
+   |---|---|
+   | `read:packages` | Pull images from GHCR |
+   | `write:packages` | Push images to GHCR |
+   | `delete:packages` | Delete old tags (needed for cleanup in Phase 6) |
+
+8. Click **Generate token**
+9. **Copy the token immediately** — GitHub will never show it again
+
+> **Fine-grained tokens vs classic tokens:** Fine-grained PATs are the newer option but have limited GHCR support. Use a classic token for GHCR until fine-grained token support for packages is stable.
+
+**Store the token securely:**
 
 ```bash
-# Log in to your registry
-docker login ghcr.io   # or docker login
+# Store in an environment variable for this session
+export GHCR_PAT=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
-# Tag and push
+# Or save to a file readable only by your user (optional)
+echo $GHCR_PAT > ~/.ghcr_pat && chmod 600 ~/.ghcr_pat
+```
+
+**Log in to GHCR:**
+
+```bash
+echo $GHCR_PAT | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+# Login Succeeded
+```
+
+Always use `--password-stdin` instead of `-p $TOKEN` directly — the latter exposes the token in your shell history and in `ps` output.
+
+### Step 3: Tag and push the image to GHCR
+
+```bash
+# Tag
 docker tag nexio-api:0.4 ghcr.io/YOUR_USERNAME/nexio-api:0.4
-docker push ghcr.io/YOUR_USERNAME/nexio-api:0.4
 
-# Capture the digest
+# Push
+docker push ghcr.io/YOUR_USERNAME/nexio-api:0.4
+```
+
+By default, the pushed package is **private**. To make it public (required for Cosign keyless verification by others):
+
+1. Go to **github.com → YOUR_USERNAME → Packages → nexio-api**
+2. Click **Package settings** (right side)
+3. Scroll to **Danger Zone → Change visibility → Public**
+
+Or leave it private — Cosign verification still works as long as the verifier has a valid GHCR token.
+
+**Capture the digest:**
+
+```bash
 DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/YOUR_USERNAME/nexio-api:0.4)
 echo $DIGEST
 # ghcr.io/YOUR_USERNAME/nexio-api@sha256:abc123...
