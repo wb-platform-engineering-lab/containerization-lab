@@ -269,7 +269,11 @@ Or leave it private — Cosign verification still works as long as the verifier 
 **Capture the digest:**
 
 ```bash
-DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/YOUR_USERNAME/nexio-api:0.4)
+# Use crane digest — always returns a registry-qualified reference.
+# docker inspect is unreliable here: if the image was built locally before
+# tagging, RepoDigests may be empty or missing the registry prefix, causing
+# Cosign to fall back to Docker Hub and fail with UNAUTHORIZED.
+DIGEST=ghcr.io/YOUR_USERNAME/nexio-api@$(crane digest ghcr.io/YOUR_USERNAME/nexio-api:0.4)
 echo $DIGEST
 # ghcr.io/YOUR_USERNAME/nexio-api@sha256:abc123...
 ```
