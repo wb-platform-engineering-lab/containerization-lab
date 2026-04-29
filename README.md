@@ -4,7 +4,7 @@ A hands-on, phase-by-phase lab for mastering container best practices — from y
 
 Built around **Nexio** — a fictional real-time event processing SaaS — where each phase is motivated by a real engineering problem the team hit as they grew.
 
-> **New here?** Start with [STORY.md](./STORY.md) to understand the "why" behind every technical decision.
+> **New here?** Read [PRINCIPLES.md](./PRINCIPLES.md) first — DevSecOps principles, what to decide before Phase 0, and the architecture decisions that constrain every phase. Then read [STORY.md](./STORY.md) for the narrative behind Nexio.
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
