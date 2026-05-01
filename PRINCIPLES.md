@@ -92,6 +92,43 @@ The key cultural shift: a Trivy scan that finds a CRITICAL CVE is not a security
 
 ---
 
+## Container threat model
+
+Before building defences, know what you are defending against. The table below lists the ten most common container attack vectors — drawn from the CIS Docker Benchmark and NIST SP 800-190 — with the attack path, the consequence if exploited, and the phase in this lab that mitigates it.
+
+> This is not an exhaustive threat model for your system. It is the baseline you must address before a container workload is production-ready. Threats specific to your architecture (multi-tenancy, specific compliance requirements, air-gapped environments) sit on top of this baseline.
+
+| # | Threat | Attack path | Consequence | Mitigated in |
+|---|---|---|---|---|
+| 1 | **Vulnerable base image** | Attacker exploits a known CVE in the OS packages or language runtime | RCE, privilege escalation, or data exfiltration via a publicly documented exploit | Phase 1 (digest pinning), Phase 5 (Trivy) |
+| 2 | **Secrets in image layers** | `docker history` or registry API reveals credentials copied into the image during build | Attacker extracts DB passwords, API keys, or certificates without ever running the container | Phase 3 (multi-stage build removes secrets), Phase 4 (BuildKit `--secret` mounts) |
+| 3 | **Container running as root** | Process runs as UID 0; a container escape or misconfigured volume mount gives host root | Full host compromise if the container boundary is breached | Phase 3 (`USER` instruction), Phase 7 (rootless Docker) |
+| 4 | **Unsigned or tampered image** | Attacker substitutes a malicious image in the registry between CI push and production pull | Malware runs in production; there is no cryptographic proof the deployed image came from your pipeline | Phase 5 (Cosign keyless signing, provenance attestation) |
+| 5 | **Excessive Linux capabilities** | Default Docker containers retain ~14 capabilities including `CAP_NET_ADMIN` and `CAP_SYS_CHROOT`; attacker uses them post-RCE | Privilege escalation to host, network manipulation, or bypass of namespace isolation | Phase 7 (`--cap-drop ALL`) |
+| 6 | **Writable container filesystem** | Attacker achieves RCE, writes a reverse shell or backdoor to `/usr/local/bin/`, sets a cron job | Persistence across pod restarts; tooling installed inside a running container | Phase 7 (`--read-only` + `--tmpfs` for writable paths) |
+| 7 | **No `no-new-privileges` guard** | A `setuid` binary inside the image lets a non-root process re-escalate to root post-exploit | Privilege escalation even when the container starts non-root | Phase 7 (`--security-opt no-new-privileges`) |
+| 8 | **Overly broad network access** | Container can reach internal services or the internet that it has no business reason to access | Lateral movement after initial compromise; data exfiltration | Phase 2 (Compose named networks), Phase 8 (network segmentation) |
+| 9 | **Exposed Docker socket or privileged mounts** | `/var/run/docker.sock` mounted into a container gives full Docker daemon control; a privileged host path gives filesystem access | Trivial full host compromise — mounting the socket is equivalent to giving the container root on the host | Phase 7 (`docker-bench-security` flags these) |
+| 10 | **No resource limits** | Compromised or misbehaving container consumes all available CPU and memory | Denial of service for all other workloads on the host; available as an amplification vector post-RCE | Phase 2 (Compose `mem_limit` / `cpus`), Phase 8 |
+
+### Reading the table
+
+No single phase eliminates all threats. Each phase addresses a specific layer of the attack surface:
+
+```
+Image build time:   Threats 1, 2          (Phase 1, 3, 4, 5)
+Artifact integrity: Threat 4              (Phase 5)
+Process isolation:  Threats 3, 5, 6, 7   (Phase 3, 7)
+Network isolation:  Threat 8             (Phase 2, 8)
+Host protection:    Threats 9, 10        (Phase 2, 7, 8)
+```
+
+This is why Defence in Depth (Principle 8) is not a platitude — it is the only architecture that holds when one layer is misconfigured, bypassed, or not yet implemented.
+
+The "What is your threat model?" section below asks you to decide which of these are in scope for your specific context before you start. The answer will differ for a public SaaS API versus a regulated financial system versus an internal tooling container.
+
+---
+
 ## The eight DevSecOps principles for container pipelines
 
 ### 1. Build once, sign once, promote
@@ -207,17 +244,19 @@ These are not technical decisions. They are organisational and architectural dec
 
 A threat model answers: *what are we protecting, from whom, and how?*
 
-For a container pipeline, the core questions are:
+The [Container threat model](#container-threat-model) section above defines the ten baseline attack vectors every container workload must address. Before you start building, decide which of those ten are in scope for your context — and crucially, which are not and why.
 
-| Threat | Question |
+The five categories you must take a position on:
+
+| Category | Question |
 |---|---|
-| Supply chain attack | Could a compromised dependency end up in production without detection? |
-| Image tampering | Could someone push a modified image to the registry without detection? |
-| Container escape | If an attacker achieves RCE in a container, what can they reach? |
-| Credential leakage | Are secrets baked into images? Are they visible in build logs? |
-| Insider threat | Can any engineer push directly to production? |
+| Supply chain | Could a compromised dependency or tampered image reach production without detection? (Threats 1, 4, 8) |
+| Secrets | Are credentials baked into images or visible in build logs? (Threat 2) |
+| Process isolation | If an attacker achieves RCE, what can they do inside and outside the container? (Threats 3, 5, 6, 7) |
+| Host protection | Can a container compromise the host or other containers? (Threats 9, 10) |
+| Insider / access control | Can any engineer push directly to production without a pipeline gate? |
 
-You do not need to mitigate every threat on day one. But you need to know which threats are in scope, so you can prioritise the controls that matter most for your context.
+You do not need to mitigate every threat on day one. But you need to have made a deliberate decision about each category — not discovered it during an incident.
 
 ### 2. What are your compliance requirements?
 
