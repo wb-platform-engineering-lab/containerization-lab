@@ -1,6 +1,8 @@
 # Phase 5 — Container Security Scanning & Signing
 
 > **Concepts introduced:** SBOM, CVE scanning in CI, Cosign, Sigstore keyless signing, provenance attestation, `docker buildx --attest`
+>
+> **CI/CD:** GitLab CI (`.gitlab-ci.yml`)
 
 ---
 
@@ -34,7 +36,7 @@
 > The platform team spent the first week reading the SLSA framework documentation and the Sigstore project. By the end of the month, every image pushed to the registry was:
 >
 > - Scanned for CVEs with Trivy before pushing
-> - Signed with Cosign using a keyless OIDC certificate tied to the GitHub Actions workflow identity
+> - Signed with Cosign using a keyless OIDC certificate tied to the GitLab CI job identity
 > - Accompanied by an SBOM in CycloneDX format
 > - Accompanied by a provenance attestation documenting the exact repo, commit, and workflow that produced it
 >
@@ -47,30 +49,30 @@
 ```
 Developer pushes to main
 │
-└── GitHub Actions: .github/workflows/scan-sign.yml
+└── GitLab CI: .gitlab-ci.yml
     │
-    ├── 1. Build (docker buildx build)
+    ├── 1. build job (docker buildx build)
     │       ├── --attest type=provenance → provenance manifest attached to image
     │       └── --attest type=sbom      → SBOM manifest attached to image
     │
-    ├── 2. Push to GHCR
-    │       ghcr.io/org/nexio-api:sha-a1b2c3
+    ├── 2. Push to GitLab Container Registry
+    │       registry.gitlab.com/org/nexio-api:sha-a1b2c3
     │
-    ├── 3. Scan (Trivy)
-    │       ├── CVE scan → SARIF uploaded to GitHub Security tab
+    ├── 3. scan job (Trivy)
+    │       ├── CVE scan → GitLab format report → Security dashboard
     │       └── EXIT CODE 1 on CRITICAL/HIGH → pipeline fails before signing
     │
-    └── 4. Sign (Cosign — keyless)
-            ├── GitHub OIDC token → Fulcio CA → short-lived certificate
+    └── 4. sign job (Cosign — keyless)
+            ├── GitLab OIDC token (id_tokens:) → Fulcio CA → short-lived certificate
             ├── Certificate proves: this signature was created by
-            │   github.com/org/repo, workflow=scan-sign.yml, ref=main
+            │   project_path:org/repo, ref_type:branch, ref:main
             └── Signature stored in Rekor transparency log (public, tamper-evident)
 
 
 Verification (anyone, anytime)
 └── cosign verify --certificate-identity-regexp ... \
-                  --certificate-oidc-issuer ... \
-                  ghcr.io/org/nexio-api@sha256:abc123
+                  --certificate-oidc-issuer "https://gitlab.com" \
+                  registry.gitlab.com/org/nexio-api@sha256:abc123
     └── Rekor: signature found, certificate valid, identity matches → OK
 ```
 
@@ -80,9 +82,7 @@ Verification (anyone, anytime)
 
 ```
 phase-5-scanning-signing/
-├── .github/
-│   └── workflows/
-│       └── scan-sign.yml    ← full CI pipeline: build, scan, sign
+├── .gitlab-ci.yml           ← full CI pipeline: build, scan, sign
 └── app/
     ├── Dockerfile            ← same as Phase 4 (BuildKit, build-args)
     ├── .dockerignore
@@ -185,7 +185,7 @@ cat trivy-results.sarif | jq '.runs[0].results | length'
 # 0 — no findings
 ```
 
-In CI, the SARIF file is uploaded to GitHub via `github/codeql-action/upload-sarif`. Results appear in the **Security → Code scanning** tab of the repository, grouped by severity, with links to CVE details.
+In CI, Trivy runs with `--format gitlab` which produces a GitLab container scanning report. The report is uploaded as a `container_scanning` artifact and appears in **GitLab → Security → Vulnerability report**, grouped by severity, with links to CVE details.
 
 ---
 
@@ -204,67 +204,49 @@ curl -sL https://github.com/sigstore/cosign/releases/latest/download/cosign-linu
 cosign version
 ```
 
-### Step 2: Generate a GitHub Personal Access Token for GHCR
+### Step 2: Authenticate with the GitLab Container Registry
 
-GHCR (GitHub Container Registry) uses Personal Access Tokens (PATs) for authentication — not your GitHub password. You need a token with the right scopes before `docker login` will work.
+The GitLab Container Registry uses your GitLab credentials for authentication. For local `docker` commands, generate a **Personal Access Token (PAT)** with `read_registry` and `write_registry` scopes.
 
 **Create the token:**
 
-1. Go to **github.com → Settings** (your profile, top-right avatar → Settings)
-2. Scroll down to **Developer settings** (bottom of the left sidebar)
-3. Click **Personal access tokens → Tokens (classic)**
-4. Click **Generate new token → Generate new token (classic)**
-5. Give it a descriptive name: `ghcr-containerization-lab`
-6. Set **Expiration** to 30 days (enough for this lab)
-7. Select these scopes:
+1. Go to **gitlab.com → your avatar (top-right) → Edit profile**
+2. Click **Access tokens** in the left sidebar
+3. Click **Add new token**
+4. Give it a name: `cr-containerization-lab`
+5. Set an expiration (30 days is sufficient for the lab)
+6. Select these scopes:
 
    | Scope | Why |
    |---|---|
-   | `read:packages` | Pull images from GHCR |
-   | `write:packages` | Push images to GHCR |
-   | `delete:packages` | Delete old tags (needed for cleanup in Phase 6) |
+   | `read_registry` | Pull images from the registry |
+   | `write_registry` | Push images to the registry |
 
-8. Click **Generate token**
-9. **Copy the token immediately** — GitHub will never show it again
+7. Click **Create personal access token**
+8. **Copy the token immediately** — GitLab will not show it again
 
-> **Fine-grained tokens vs classic tokens:** Fine-grained PATs are the newer option but have limited GHCR support. Use a classic token for GHCR until fine-grained token support for packages is stable.
-
-**Store the token securely:**
+**Store and log in:**
 
 ```bash
-# Store in an environment variable for this session
-export GHCR_PAT=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+export GL_PAT=glpat-xxxxxxxxxxxxxxxxxxxx
 
-# Or save to a file readable only by your user (optional)
-echo $GHCR_PAT > ~/.ghcr_pat && chmod 600 ~/.ghcr_pat
-```
-
-**Log in to GHCR:**
-
-```bash
-echo $GHCR_PAT | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+echo $GL_PAT | docker login registry.gitlab.com -u YOUR_GITLAB_USERNAME --password-stdin
 # Login Succeeded
 ```
 
-Always use `--password-stdin` instead of `-p $TOKEN` directly — the latter exposes the token in your shell history and in `ps` output.
+Always use `--password-stdin` instead of `-p $TOKEN` — the latter exposes the token in your shell history and in `ps` output.
 
-### Step 3: Tag and push the image to GHCR
+### Step 3: Tag and push the image to the GitLab Container Registry
 
 ```bash
 # Tag
-docker tag nexio-api:0.4 ghcr.io/YOUR_USERNAME/nexio-api:0.4
+docker tag nexio-api:0.4 registry.gitlab.com/YOUR_NAMESPACE/containerization-lab/nexio-api:0.4
 
 # Push
-docker push ghcr.io/YOUR_USERNAME/nexio-api:0.4
+docker push registry.gitlab.com/YOUR_NAMESPACE/containerization-lab/nexio-api:0.4
 ```
 
-By default, the pushed package is **private**. To make it public (required for Cosign keyless verification by others):
-
-1. Go to **github.com → YOUR_USERNAME → Packages → nexio-api**
-2. Click **Package settings** (right side)
-3. Scroll to **Danger Zone → Change visibility → Public**
-
-Or leave it private — Cosign verification still works as long as the verifier has a valid GHCR token.
+The pushed image is private by default. Visibility follows the project's visibility setting.
 
 **Capture the digest:**
 
@@ -273,9 +255,10 @@ Or leave it private — Cosign verification still works as long as the verifier 
 # docker inspect is unreliable here: if the image was built locally before
 # tagging, RepoDigests may be empty or missing the registry prefix, causing
 # Cosign to fall back to Docker Hub and fail with UNAUTHORIZED.
-DIGEST=ghcr.io/YOUR_USERNAME/nexio-api@$(crane digest ghcr.io/YOUR_USERNAME/nexio-api:0.4)
+IMAGE=registry.gitlab.com/YOUR_NAMESPACE/containerization-lab/nexio-api
+DIGEST=$IMAGE@$(crane digest $IMAGE:0.4)
 echo $DIGEST
-# ghcr.io/YOUR_USERNAME/nexio-api@sha256:abc123...
+# registry.gitlab.com/.../nexio-api@sha256:abc123...
 ```
 
 > **Why sign by digest, not tag?** Tags are mutable — `nexio-api:0.4` can be overwritten at any time. A digest (`sha256:abc123`) is immutable and uniquely identifies the exact bytes. Signing by digest creates an unforgeable link between the signature and those specific bytes.
@@ -413,70 +396,163 @@ cosign verify-attestation \
 
 ---
 
-## Challenge 6 — Review the CI workflow
+## Challenge 6 — Run the pipeline in GitLab CI
 
-The workflow at `.github/workflows/scan-sign.yml` automates every step: build, scan, sign.
+Challenges 1–5 taught you every command by running it locally. This challenge automates the exact same sequence in GitLab CI so you understand what runs locally versus what runs in CI — and why the CI version is the one that matters in production.
 
-### Step 1: Review the workflow structure
+> **Why run locally first?** You cannot debug a CI pipeline you don't understand. Running Trivy and Cosign locally means you can inspect outputs, iterate on flags, and reproduce failures without the overhead of a push + queue + runner startup cycle. Once you understand each step, CI is just orchestration.
 
-```bash
-cat phase-5-scanning-signing/.github/workflows/scan-sign.yml
-```
+### Step 1: Copy the pipeline file to the repository root
 
-Walk through the key sections:
-
-**Permissions block:**
-```yaml
-permissions:
-  contents: read
-  packages: write        # push to GHCR
-  id-token: write        # keyless Cosign signing via GitHub OIDC
-  security-events: write # upload SARIF to GitHub Security tab
-```
-
-`id-token: write` is the critical permission for keyless signing. It allows the workflow to request a GitHub OIDC token, which Cosign uses to obtain a Fulcio certificate.
-
-**Build step:**
-```yaml
-- uses: docker/build-push-action@v6
-  with:
-    provenance: true
-    sbom: true
-```
-
-`provenance: true` and `sbom: true` generate attestation manifests inline, equivalent to `--attest type=provenance --attest type=sbom`.
-
-**Scan step:**
-```yaml
-- uses: aquasecurity/trivy-action@master
-  with:
-    exit-code: "1"
-    severity: CRITICAL,HIGH
-```
-
-If Trivy finds any CRITICAL or HIGH CVEs, the workflow exits with code 1. The signing step never runs — a vulnerable image is never signed.
-
-**Sign step:**
-```yaml
-- run: |
-    cosign sign --yes \
-      ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
-```
-
-Signs by digest, not by tag. Uses the GitHub Actions OIDC token automatically — no credentials to configure.
-
-### Step 2: What a verifier sees
-
-Anyone with access to the image can verify it:
+GitLab CI requires `.gitlab-ci.yml` at the root of the repository. Copy the phase-5 pipeline there:
 
 ```bash
+cp phase-5-scanning-signing/.gitlab-ci.yml .gitlab-ci.yml
+```
+
+### Step 2: Understand how authentication works in GitLab CI
+
+Unlike GitHub Actions (which requires configuring package write permissions), GitLab CI provides registry credentials and an OIDC token automatically — no secrets to configure.
+
+| Variable | What it is | Set by |
+|---|---|---|
+| `$CI_REGISTRY` | `registry.gitlab.com` | GitLab — automatic |
+| `$CI_REGISTRY_USER` | `gitlab-ci-token` | GitLab — automatic |
+| `$CI_REGISTRY_PASSWORD` | short-lived job token | GitLab — automatic |
+| `$CI_REGISTRY_IMAGE` | full image path for this project | GitLab — automatic |
+
+The pipeline uses these without any manual configuration.
+
+### Step 3: Understand the `id_tokens` block
+
+```yaml
+id_tokens:
+  SIGSTORE_ID_TOKEN:
+    aud: sigstore
+```
+
+This is the GitLab CI equivalent of GitHub's `id-token: write` permission. It requests a short-lived OIDC JWT with audience `sigstore`, which Cosign uses to obtain a Fulcio certificate — no private key required.
+
+The certificate identity is bound to the job's GitLab identity:
+
+```
+project_path:YOUR_NAMESPACE/containerization-lab:ref_type:branch:ref:main
+```
+
+This is the key difference between signing locally (you authenticate via browser) and signing in CI (the job authenticates via OIDC token, no human in the loop).
+
+### Step 4: Push to trigger the pipeline
+
+```bash
+git add .gitlab-ci.yml
+git commit -m "ci: add scan-sign pipeline"
+git push origin main
+```
+
+Navigate to **GitLab → your project → CI/CD → Pipelines**. You will see the pipeline running with three stages: `build`, `scan`, `sign`.
+
+### Step 5: Follow the build job
+
+Click into the running pipeline, then click the `build` job. Watch the logs:
+
+- `docker buildx create` — creates a BuildKit builder inside the DinD service
+- `docker buildx build` — builds the image for `linux/amd64`, pushes to the GitLab Container Registry, attaches SBOM and provenance attestations
+- The `IMAGE_DIGEST` is captured via `--metadata-file` and passed to downstream jobs via a dotenv artifact
+
+Look for the push confirmation in the log:
+```
+#18 pushing manifest for registry.gitlab.com/.../nexio-api:sha-abc123@sha256:...
+#18 DONE
+```
+
+### Step 6: Follow the scan job
+
+The `scan` job starts after `build` completes. Watch the Trivy output:
+
+```
+2026-04-29T10:00:00Z INFO Vulnerability scanning is enabled
+2026-04-29T10:00:05Z INFO Detected OS: debian 12.x
+...
+registry.gitlab.com/.../nexio-api@sha256:abc123 (debian 12.x)
+Total: 0 (HIGH: 0, CRITICAL: 0)
+```
+
+A clean scan → exit code 0 → the `sign` job is unlocked.
+
+After the scan job completes, go to **GitLab → your project → Security → Vulnerability report**. The Trivy results appear there — grouped by severity, with CVE links.
+
+### Step 7: Follow the sign job
+
+The `sign` job runs only after both `build` and `scan` succeed. Watch the log:
+
+```
+Generating ephemeral keys...
+Retrieving signed certificate...
+Successfully verified SCT...
+tlog entry created with index: 12345678
+Pushing signature to: registry.gitlab.com/.../nexio-api
+```
+
+No browser authentication. No private key. The runner used its OIDC token — GitLab's cryptographic proof of the job's identity — to obtain a Fulcio certificate and sign the image automatically.
+
+### Step 8: Verify the signature locally
+
+Back on your machine, verify that the image was signed by your CI pipeline:
+
+```bash
+IMAGE=registry.gitlab.com/YOUR_NAMESPACE/containerization-lab/nexio-api
+DIGEST=$(crane digest $IMAGE:latest)
+
 cosign verify \
-  --certificate-identity-regexp "https://github.com/wb-platform-engineering-lab/containerization-lab/.*" \
-  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  ghcr.io/wb-platform-engineering-lab/nexio-api@sha256:abc123
+  --certificate-identity-regexp \
+    "^project_path:YOUR_NAMESPACE/containerization-lab:.*" \
+  --certificate-oidc-issuer "https://gitlab.com" \
+  $IMAGE@$DIGEST
 ```
 
-This answers: *"Was this image signed by our CI pipeline?"* The answer is verifiable by anyone — the signature is in the registry, the certificate is from Fulcio, and the signing event is in Rekor's public transparency log.
+Expected:
+```
+Verification for registry.gitlab.com/.../nexio-api@sha256:abc123 --
+The following checks were performed on each of these signatures:
+  - The cosign claims were validated
+  - Existence of the claims in the transparency log was verified offline
+  - The code-signing certificate claims were validated
+```
+
+This is the end-to-end proof: the image in the registry was built by your CI pipeline, passed a Trivy scan with no CRITICAL/HIGH findings, and was signed with a certificate bound to that specific job identity. Any deployment system can run this `cosign verify` command to enforce the policy.
+
+### Step 9: Simulate a scan failure
+
+Edit `phase-5-scanning-signing/app/Dockerfile` and temporarily use a vulnerable base:
+
+```dockerfile
+FROM python:3.9   # intentionally old
+```
+
+Commit and push:
+
+```bash
+git add phase-5-scanning-signing/app/Dockerfile .gitlab-ci.yml
+git commit -m "test: use vulnerable base to trigger scan failure"
+git push origin main
+```
+
+Watch the pipeline in **CI/CD → Pipelines**:
+
+- `build` — succeeds (the image builds fine)
+- `scan` — **fails** (Trivy finds CRITICAL CVEs, exits with code 1)
+- `sign` — **skipped** (because `scan` failed — a failed `needs` dependency skips dependent jobs)
+
+The image exists in the registry but is **not signed**. A deployment policy that requires a valid Cosign signature will reject it.
+
+Revert the Dockerfile and push again:
+
+```bash
+git revert HEAD --no-edit
+git push origin main
+```
+
+The pipeline goes green, the image is signed, and the revert is in git history — a clean audit trail.
 
 ---
 
@@ -487,7 +563,7 @@ This answers: *"Was this image signed by our CI pipeline?"* The answer is verifi
 | `trivy image name:tag` | Vulnerability scan |
 | `trivy image --format cyclonedx -o sbom.json name:tag` | Generate CycloneDX SBOM |
 | `trivy image --format spdx-json -o sbom.spdx.json name:tag` | Generate SPDX SBOM |
-| `trivy image --format sarif -o results.sarif name:tag` | SARIF output for GitHub Security tab |
+| `trivy image --format gitlab -o gl-container-scanning-report.json name:tag` | GitLab container scanning report |
 | `cosign sign --yes image@digest` | Keyless sign (keyless via OIDC) |
 | `cosign verify --certificate-identity ... image@digest` | Verify a signature |
 | `cosign download attestation image:tag` | Download attached attestations |
@@ -517,7 +593,7 @@ An SBOM attached to an image is useful when a CVE is published and you need to k
 
 ## Outcome
 
-Every image pushed to the registry is: scanned for CVEs before signing, signed with an OIDC-bound certificate tied to the exact GitHub Actions workflow that built it, and accompanied by a CycloneDX SBOM and a provenance attestation. The signing event is recorded in a public tamper-evident transparency log. Any image in the registry can be verified in 30 seconds by anyone with the registry address and the expected signing identity.
+Every image pushed to the registry is: scanned for CVEs before signing, signed with an OIDC-bound certificate tied to the exact GitLab CI job identity that built it, and accompanied by a CycloneDX SBOM and a provenance attestation. The signing event is recorded in a public tamper-evident transparency log. Any image in the registry can be verified in 30 seconds by anyone with the registry address and the expected signing identity.
 
 ---
 

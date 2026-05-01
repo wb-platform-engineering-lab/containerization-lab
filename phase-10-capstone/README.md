@@ -1,6 +1,6 @@
 # Phase 10 — Capstone: Production Pipeline
 
-> **This phase ties together every technique from Phases 1–9 into a single, production-grade GitHub Actions workflow.**
+> **This phase ties together every technique from Phases 1–9 into a single, production-grade GitLab CI pipeline.**
 
 ---
 
@@ -12,9 +12,9 @@ A complete CI/CD pipeline that runs on every push to `main` and on every semver 
 |---|---|---|
 | 1 | Multi-stage Dockerfile, `.dockerignore` | `context: phase-10-capstone/app` |
 | 3 | Non-root user, HEALTHCHECK, OCI labels | Dockerfile |
-| 4 | BuildKit cache mounts, `--build-arg`, multi-platform, GHA cache | `build-push-action` with `cache-from/to: type=gha` |
+| 4 | BuildKit cache mounts, `--build-arg`, multi-platform, registry cache | `docker buildx build` with `cache-from/to: type=registry` |
 | 5 | Trivy CVE scan, Cosign keyless signing, SBOM + provenance | `scan` and `sign` jobs |
-| 6 | SHA + semver tagging, GHCR push | `metadata-action` tags matrix |
+| 6 | SHA + semver tagging, GitLab Container Registry push | tagging logic in `build` job |
 | 9 | Structured logs, liveness/readiness probes | Application design |
 
 ---
@@ -39,33 +39,33 @@ A complete CI/CD pipeline that runs on every push to `main` and on every semver 
 git push to main (or tag v*.*.*)
 │
 └── Job 1: build
-    ├── docker/setup-buildx-action       ← Phase 4: BuildKit + QEMU
-    ├── docker/metadata-action           ← Phase 6: sha + semver tags
-    ├── docker/build-push-action         ← Phase 4: multi-platform, GHA cache
+    ├── docker buildx create            ← Phase 4: BuildKit + QEMU
+    ├── tagging logic                   ← Phase 6: sha + semver tags
+    ├── docker buildx build --push      ← Phase 4: multi-platform, registry cache
     │    ├── platforms: linux/amd64,linux/arm64
-    │    ├── cache-from/to: type=gha,mode=max
+    │    ├── cache-from/to: type=registry,mode=max
     │    ├── build-args: APP_VERSION, BUILD_DATE
-    │    ├── provenance: true            ← Phase 5: provenance attestation
-    │    └── sbom: true                 ← Phase 5: SBOM attestation
-    └── outputs: digest, image_ref, tags
+    │    ├── --attest type=provenance   ← Phase 5: provenance attestation
+    │    └── --attest type=sbom        ← Phase 5: SBOM attestation
+    └── digest captured via --metadata-file → passed via dotenv artifact
          │
          ▼
     Job 2: scan  (needs: build)
-    ├── aquasecurity/trivy-action        ← Phase 5: CVE scan
+    ├── trivy image                     ← Phase 5: CVE scan
     │    ├── severity: CRITICAL,HIGH
-    │    ├── exit-code: 1               ← fail pipeline on findings
-    │    └── format: sarif              ← upload to GitHub Security tab
+    │    ├── exit-code: 1              ← fail pipeline on findings
+    │    └── format: gitlab            ← GitLab Security dashboard report
     └── ✓ scan passes
          │
          ▼
     Job 3: sign  (needs: build, scan)
-    ├── sigstore/cosign-installer        ← Phase 5: keyless signing
-    ├── cosign sign --yes image@digest  ← signs by digest, not tag
-    └── cosign verify ...               ← self-verify before the job ends
+    ├── id_tokens: SIGSTORE_ID_TOKEN    ← Phase 5: GitLab OIDC for keyless signing
+    ├── cosign sign --yes image@digest ← signs by digest, not tag
+    └── cosign verify ...              ← self-verify before the job ends
          │
          ▼
     Job 4: summary  (always runs)
-    └── $GITHUB_STEP_SUMMARY            ← build report in PR/push view
+    └── echo to job log                ← build report with verify command
 ```
 
 ---
@@ -74,9 +74,7 @@ git push to main (or tag v*.*.*)
 
 ```
 phase-10-capstone/
-├── .github/
-│   └── workflows/
-│       └── production-pipeline.yml   ← the complete pipeline
+├── .gitlab-ci.yml                    ← the complete pipeline
 └── app/
     ├── Dockerfile                    ← all best practices from Phases 1–9
     ├── .dockerignore
@@ -86,12 +84,12 @@ phase-10-capstone/
 
 ---
 
-## Challenge 1 — Review the full workflow
+## Challenge 1 — Review the full pipeline
 
-### Step 1: Read the workflow file
+### Step 1: Read the pipeline file
 
 ```bash
-cat phase-10-capstone/.github/workflows/production-pipeline.yml
+cat phase-10-capstone/.gitlab-ci.yml
 ```
 
 Walk through each job and match it to the phase that introduced the technique.
@@ -99,82 +97,74 @@ Walk through each job and match it to the phase that introduced the technique.
 ### Step 2: Understand the job dependency graph
 
 ```yaml
-jobs:
-  build:   # no dependency — runs first
-  scan:    # needs: [build]  — runs after build
-  sign:    # needs: [build, scan]  — runs only after clean scan
-  summary: # needs: [build, scan, sign], if: always()  — always runs
+build:   # no needs — runs first
+scan:    # needs: [build]       — runs after build
+sign:    # needs: [build, scan] — runs only after clean scan
+summary: # needs: all, when: always — always runs
 ```
 
 The ordering is the security guarantee: an image is **never signed before it has passed a CVE scan**. If Trivy finds a CRITICAL vulnerability, the `scan` job fails, the `sign` job is skipped (because its `needs` dependency failed), and the unsigned, vulnerable image stays in the registry unendorsed.
 
-### Step 3: Understand the `if` conditions
+### Step 3: Understand the `rules` conditions
 
 ```yaml
-# scan job
-if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+# scan job — runs on main pushes and MRs, not on tag-only pipelines
+rules:
+  - if: $CI_COMMIT_BRANCH == "main"
+  - if: $CI_PIPELINE_SOURCE == "merge_request_event"
 
-# sign job
-if: |
-  github.event_name != 'pull_request' &&
-  (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+# sign job — only signs on main or semver tags
+rules:
+  - if: $CI_COMMIT_BRANCH == "main"
+  - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 ```
 
-On pull requests: build runs (validates the Dockerfile), scan runs (catches CVEs in PRs), sign does NOT run (PRs are not deployed). On pushes to `main`: all four jobs run. On semver tags: all four jobs run.
+On merge requests: build runs (validates the Dockerfile), scan runs (catches CVEs in MRs), sign does NOT run (MRs are not deployed). On pushes to `main`: all four jobs run. On semver tags: all four jobs run.
 
 ---
 
 ## Challenge 2 — Set up the repository and run the pipeline
 
-### Step 1: Fork or use the lab repository
+### Step 1: Copy the pipeline file to the repository root
 
-The workflow is at `phase-10-capstone/.github/workflows/production-pipeline.yml`. For it to run, the `.github/workflows/` directory must be at the root of the repository that GitHub Actions monitors.
-
-Copy the workflow to the root of your own repository:
+GitLab CI requires `.gitlab-ci.yml` at the root of the repository.
 
 ```bash
-mkdir -p .github/workflows
-cp phase-10-capstone/.github/workflows/production-pipeline.yml \
-   .github/workflows/production-pipeline.yml
+cp phase-10-capstone/.gitlab-ci.yml .gitlab-ci.yml
 ```
 
-Adjust the `context:` path in the workflow to match where your Dockerfile lives.
+Adjust the `phase-10-capstone/app/` build context path if your Dockerfile lives elsewhere.
 
-### Step 2: Verify GHCR permissions
+### Step 2: Verify registry access
 
-The workflow uses `secrets.GITHUB_TOKEN` for GHCR authentication. No additional secrets need to be configured — the token is provided automatically by GitHub Actions. Ensure the repository's **Settings → Actions → General → Workflow permissions** is set to "Read and write permissions".
+No secrets to configure. GitLab CI provides `$CI_REGISTRY`, `$CI_REGISTRY_USER`, and `$CI_REGISTRY_PASSWORD` automatically for every job. The `id_tokens:` block in the sign job requests the OIDC token for Cosign keyless signing — also automatic.
 
 ### Step 3: Push to main and watch the pipeline
 
 ```bash
-git add .github/workflows/production-pipeline.yml
+git add .gitlab-ci.yml
 git commit -m "feat: add production pipeline"
 git push origin main
 ```
 
-Navigate to **Actions** in your GitHub repository. You will see the four jobs running in sequence.
+Navigate to **CI/CD → Pipelines** in your GitLab project. You will see the four stages running in sequence.
 
 ### Step 4: Inspect the build summary
 
-After the pipeline completes, click on the workflow run and scroll to the bottom. The `summary` job writes to `$GITHUB_STEP_SUMMARY` — a markdown report visible directly in the workflow run view:
+After the pipeline completes, click into the `summary` job. The log prints the image reference and the exact `cosign verify` command to use:
 
 ```
-## Build Summary
+========================================
+ Build Summary
+========================================
+Image: registry.gitlab.com/your-org/nexio-api@sha256:abc123...
+Tag:   registry.gitlab.com/your-org/nexio-api:sha-a1b2c3d
 
-| Step  | Status  |
-|-------|---------|
-| Build | success |
-| Scan  | success |
-| Sign  | success |
-
-### Image
-ghcr.io/your-org/nexio-api@sha256:abc123...
-
-### Verify signature
-cosign verify \
-  --certificate-identity-regexp "https://github.com/your-org/..." \
-  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  ghcr.io/your-org/nexio-api@sha256:abc123...
+Verify:
+  cosign verify \
+    --certificate-identity-regexp "^project_path:your-org/..." \
+    --certificate-oidc-issuer "https://gitlab.com" \
+    registry.gitlab.com/your-org/nexio-api@sha256:abc123...
 ```
 
 ---
@@ -190,14 +180,14 @@ git push origin v1.0.0
 
 ### Step 2: Observe the additional semver tags
 
-The `metadata-action` generates:
+The tagging logic in the `build` job generates:
 - `nexio-api:sha-a1b2c3d` — commit SHA (every push)
 - `nexio-api:v1.0.0` — exact version (on tag)
 - `nexio-api:1.0` — floating minor (on tag)
 - `nexio-api:latest` — latest main (on push to main)
 
 ```bash
-crane ls ghcr.io/your-org/nexio-api
+crane ls registry.gitlab.com/your-org/containerization-lab/nexio-api
 # latest
 # sha-a1b2c3d
 # v1.0.0
@@ -207,12 +197,13 @@ crane ls ghcr.io/your-org/nexio-api
 ### Step 3: Verify the release image is signed
 
 ```bash
-DIGEST=$(crane digest ghcr.io/your-org/nexio-api:v1.0.0)
+IMAGE=registry.gitlab.com/your-org/containerization-lab/nexio-api
+DIGEST=$(crane digest $IMAGE:v1.0.0)
 
 cosign verify \
-  --certificate-identity-regexp "https://github.com/your-org/containerization-lab/.*" \
-  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  ghcr.io/your-org/nexio-api@$DIGEST
+  --certificate-identity-regexp "^project_path:your-org/containerization-lab:.*" \
+  --certificate-oidc-issuer "https://gitlab.com" \
+  $IMAGE@$DIGEST
 ```
 
 ---
@@ -238,12 +229,12 @@ git push origin main
 
 ### Step 2: Watch the pipeline fail at the scan step
 
-In GitHub Actions:
+In GitLab CI → **CI/CD → Pipelines**:
 
 - `build` — succeeds (the image builds)
 - `scan` — **fails** (Trivy finds CRITICAL CVEs in python:3.9)
 - `sign` — **skipped** (because `scan` failed)
-- `summary` — reports the failure
+- `summary` — runs (it has `when: always`)
 
 The vulnerable image was pushed to GHCR (the build step pushes before the scan). But it is **not signed**. Your deployment policy (enforced via Cosign admission controller or image pull policy) should reject unsigned images — so the vulnerable image can never be deployed.
 
@@ -274,10 +265,11 @@ cosign download attestation ghcr.io/your-org/nexio-api:sha-a1b2c3d \
 ### Q2: Was this image built by our CI pipeline?
 
 ```bash
+IMAGE=registry.gitlab.com/your-org/containerization-lab/nexio-api
 cosign verify \
-  --certificate-identity-regexp "https://github.com/your-org/containerization-lab/.*" \
-  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  ghcr.io/your-org/nexio-api@sha256:...
+  --certificate-identity-regexp "^project_path:your-org/containerization-lab:.*" \
+  --certificate-oidc-issuer "https://gitlab.com" \
+  $IMAGE@sha256:...
 # Verification for ... -- The following checks were performed ...
 ```
 
@@ -320,16 +312,16 @@ The workflow is designed to be copied. To adapt it for a new service:
 ### Step 1: Change the image name
 
 ```yaml
-env:
-  IMAGE_NAME: ${{ github.repository_owner }}/your-service-name
+variables:
+  IMAGE_NAME: $CI_REGISTRY_IMAGE/your-service-name
 ```
 
 ### Step 2: Change the build context
 
 ```yaml
-- uses: docker/build-push-action@v6
-  with:
-    context: path/to/your/service
+docker buildx build \
+  ...
+  path/to/your/service/
 ```
 
 ### Step 3: Adjust severity thresholds if needed
@@ -355,22 +347,23 @@ Never remove the scan step. A pipeline without a scan is a vulnerability deliver
 ## Production considerations
 
 ### 1. The pipeline is the security boundary
-The workflow runs on GitHub-hosted runners with ephemeral environments. The `id-token: write` permission and the `GITHUB_TOKEN` are the only credentials needed. There are no long-lived secrets to rotate, no SSH keys to protect, no service account JSON files. This is the correct model.
+GitLab CI jobs run on ephemeral runners. `$CI_REGISTRY_PASSWORD` (a short-lived job token) and the `id_tokens:` OIDC JWT are the only credentials needed — both are provided automatically and scoped to the current job. There are no long-lived secrets to rotate, no SSH keys to protect, no service account JSON files. This is the correct model.
 
 ### 2. Enforce signatures at deployment time
 A signing pipeline is only meaningful if unsigned images are rejected at deployment. In Kubernetes, deploy a Kyverno policy or OPA Gatekeeper constraint that calls `cosign verify` before admitting a pod. Without enforcement, signing is an audit trail — useful but not a security control.
 
-### 3. Pin action versions by commit SHA in production
+### 3. Pin Docker image versions in production
 ```yaml
-uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+image: docker:27.3.1        # pinned — not docker:latest
+image: aquasec/trivy:0.62.0 # pinned — not trivy:latest
 ```
-Tag-based action references (`@v4`) can be overwritten by the action author. A SHA reference is immutable. Use [Dependabot](https://docs.github.com/en/code-security/dependabot/working-with-dependabot/keeping-your-actions-up-to-date-with-dependabot) to automatically open PRs when new versions are available.
+Floating tags (`docker:latest`, `trivy:latest`) can change between pipeline runs, introducing unexpected behaviour or vulnerabilities. Pin to specific versions and use Renovate or Dependabot to open MRs when new versions are published.
 
 ### 4. The build job pushes before the scan
 This is a deliberate trade-off: the multi-platform build (`docker buildx build --push`) requires the image to be in the registry before attestations can be attached. The image exists in the registry but is unsigned. Enforce a policy that only signed images can be pulled — unsigned images in the registry are harmless without enforcement.
 
 ### 5. Treat the pipeline itself as code
-`production-pipeline.yml` deserves the same review standards as application code. A change to the pipeline should require approval from a platform engineer. A PR that removes the CVE scan step or changes `exit-code: "1"` to `"0"` should be caught in review — not discovered in a post-incident retrospective.
+`.gitlab-ci.yml` deserves the same review standards as application code. A change to the pipeline should require approval from a platform engineer. An MR that removes the CVE scan step or changes `exit-code: 1` to `0` should be caught in review — not discovered in a post-incident retrospective. Use GitLab's **protected branches** and **required approvals** to enforce this.
 
 ---
 

@@ -1,0 +1,175 @@
+# Phase 10 — Production Pipeline (Capstone)
+# GitLab CI equivalent of the GitHub Actions production-pipeline workflow.
+#
+# Integrates every technique from Phases 1–9:
+#   Phase 1: multi-stage Dockerfile, .dockerignore
+#   Phase 3: non-root user, HEALTHCHECK, OCI labels
+#   Phase 4: BuildKit, --build-arg, multi-platform, registry cache
+#   Phase 5: Trivy CVE scan, Cosign keyless signing, SBOM + provenance
+#   Phase 6: SHA + semver tagging, GitLab Container Registry push
+#
+# To run this pipeline, copy this file to the root of your repository:
+#   cp phase-10-capstone/.gitlab-ci.yml .gitlab-ci.yml
+
+stages:
+  - build
+  - scan
+  - sign
+  - summary
+
+variables:
+  IMAGE_NAME: $CI_REGISTRY_IMAGE/nexio-api
+  DOCKER_HOST: tcp://docker:2376
+  DOCKER_TLS_CERTDIR: "/certs"
+
+# ── Job 1: Build ──────────────────────────────────────────────────────────────
+build:
+  stage: build
+  image: docker:27
+  services:
+    - name: docker:27-dind
+      alias: docker
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - apk add --no-cache jq
+    - docker buildx create --use --name ci-builder --driver docker-container
+    # Multi-platform cross-compilation
+    - docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+  script:
+    - SHORT_SHA=$(echo $CI_COMMIT_SHA | cut -c1-7)
+    - TAG_SHA=$IMAGE_NAME:sha-$SHORT_SHA
+    - BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    - |
+      # Tagging strategy (mirrors Phase 6):
+      #   Every push:   nexio-api:sha-a1b2c3d   (immutable — safe to pin)
+      #   Push to main: nexio-api:latest         (mutable — dev convenience)
+      #   Semver tag:   nexio-api:v1.2.3         (mutable — human-readable release)
+      #                 nexio-api:1.2             (floating minor)
+      TAGS="-t $TAG_SHA"
+      if [ "$CI_COMMIT_BRANCH" = "main" ]; then
+        TAGS="$TAGS -t $IMAGE_NAME:latest"
+      fi
+      if echo "$CI_COMMIT_TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+        MINOR=$(echo "$CI_COMMIT_TAG" | sed 's/^v//' | cut -d. -f1-2)
+        TAGS="$TAGS -t $IMAGE_NAME:$CI_COMMIT_TAG -t $IMAGE_NAME:$MINOR"
+      fi
+    - |
+      docker buildx build \
+        --platform linux/amd64,linux/arm64 \
+        --build-arg APP_VERSION=$CI_COMMIT_SHA \
+        --build-arg BUILD_DATE=$BUILD_DATE \
+        --cache-from type=registry,ref=$IMAGE_NAME:cache \
+        --cache-to   type=registry,ref=$IMAGE_NAME:cache,mode=max \
+        --attest type=provenance,mode=max \
+        --attest type=sbom \
+        --metadata-file /tmp/build-metadata.json \
+        --push \
+        $TAGS \
+        phase-10-capstone/app/
+    - |
+      DIGEST=$(jq -r '."containerimage.digest"' /tmp/build-metadata.json)
+      echo "IMAGE_DIGEST=$DIGEST"   > build.env
+      echo "IMAGE_TAG_SHA=$TAG_SHA" >> build.env
+      echo "IMAGE_TAGS=$TAGS"       >> build.env
+  artifacts:
+    reports:
+      dotenv: build.env
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+# ── Job 2: Scan ───────────────────────────────────────────────────────────────
+scan:
+  stage: scan
+  image:
+    name: aquasec/trivy:latest
+    entrypoint: [""]
+  variables:
+    TRIVY_USERNAME: $CI_REGISTRY_USER
+    TRIVY_PASSWORD: $CI_REGISTRY_PASSWORD
+    TRIVY_AUTH_URL: $CI_REGISTRY
+  script:
+    - |
+      trivy image \
+        --severity CRITICAL,HIGH \
+        --exit-code 1 \
+        --format gitlab \
+        --output gl-container-scanning-report.json \
+        $IMAGE_NAME@$IMAGE_DIGEST
+  artifacts:
+    reports:
+      container_scanning: gl-container-scanning-report.json
+    when: always
+  needs:
+    - job: build
+      artifacts: true
+  # Scan on main pushes and MRs; skip on tag-only pipelines (already scanned on main)
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ── Job 3: Sign ───────────────────────────────────────────────────────────────
+sign:
+  stage: sign
+  image: alpine:3.20
+  id_tokens:
+    SIGSTORE_ID_TOKEN:
+      aud: sigstore
+  before_script:
+    - apk add --no-cache curl
+    - |
+      curl -sL \
+        https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64 \
+        -o /usr/local/bin/cosign
+      chmod +x /usr/local/bin/cosign
+    - cosign login $CI_REGISTRY -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD
+  script:
+    # Sign by digest (immutable), not by tag (mutable).
+    # The certificate is bound to this job's GitLab OIDC identity.
+    # The signing event is recorded in Rekor's public transparency log.
+    - cosign sign --yes $IMAGE_NAME@$IMAGE_DIGEST
+    - |
+      cosign verify \
+        --certificate-identity-regexp \
+          "^project_path:$CI_PROJECT_PATH:ref_type:branch:ref:$CI_COMMIT_REF_NAME$" \
+        --certificate-oidc-issuer "https://gitlab.com" \
+        $IMAGE_NAME@$IMAGE_DIGEST
+  needs:
+    - job: build
+      artifacts: true
+    - job: scan
+  # Only sign images that passed the scan and are on main or a release tag
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+# ── Job 4: Summary ────────────────────────────────────────────────────────────
+summary:
+  stage: summary
+  image: alpine:3.20
+  needs:
+    - job: build
+      artifacts: true
+    - job: scan
+      optional: true
+    - job: sign
+      optional: true
+  when: always
+  script:
+    - |
+      echo "========================================"
+      echo " Build Summary"
+      echo "========================================"
+      echo ""
+      echo "Image:  $IMAGE_NAME@$IMAGE_DIGEST"
+      echo "Tag:    $IMAGE_TAG_SHA"
+      echo ""
+      echo "Verify signature:"
+      echo "  cosign verify \\"
+      echo "    --certificate-identity-regexp \"^project_path:$CI_PROJECT_PATH:.*\" \\"
+      echo "    --certificate-oidc-issuer \"https://gitlab.com\" \\"
+      echo "    $IMAGE_NAME@$IMAGE_DIGEST"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
