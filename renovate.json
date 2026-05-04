@@ -1,0 +1,40 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:base"],
+
+  "pinDigests": true,
+
+  "dockerfile": {
+    "enabled": true
+  },
+
+  "packageRules": [
+    {
+      "matchManagers": ["dockerfile"],
+      "automerge": false,
+      "commitMessagePrefix": "fix(deps):",
+      "labels": ["dependencies", "docker"],
+      "description": "Dockerfile base image digest bumps — review pipeline results before merging"
+    },
+    {
+      "matchManagers": ["pip_requirements"],
+      "automerge": false,
+      "commitMessagePrefix": "fix(deps):",
+      "labels": ["dependencies", "python"],
+      "description": "Python dependency updates"
+    }
+  ],
+
+  "schedule": ["before 6am on Monday"],
+
+  "prCreation": "immediate",
+  "platformAutomerge": false,
+
+  "commitMessageAction": "pin",
+  "commitMessageTopic": "{{depName}} digest",
+
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/.venv/**"
+  ]
+}

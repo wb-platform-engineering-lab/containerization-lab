@@ -1,15 +1,36 @@
 # Production Pipeline — Containerization Lab Capstone
 #
-# This is the active CI/CD pipeline for the lab repository.
-# It is the GitLab CI equivalent of phase-10-capstone/.gitlab-ci.yml
-# and runs automatically on every push to main and on semver release tags.
+# Full workflow:
 #
-# See phase-10-capstone/README.md for the full walkthrough.
+#   1. SCHEDULE (Monday 05:00 UTC)
+#      └── renovate job scans Dockerfiles + requirements.txt
+#          └── opens an MR for any outdated digest or dependency
 #
-# Also includes:
-#   renovate — scheduled job (Monday 05:00 UTC) that opens MRs for
-#              Dockerfile digest bumps via Renovate bot.
-#              Requires RENOVATE_TOKEN CI/CD variable (see phase-1 Challenge 7).
+#   2. MERGE REQUEST (Renovate MR or developer MR)
+#      └── build  → pushes :sha-<sha> to registry (no :latest)
+#      └── scan   → Trivy scans the built image, uploads SARIF to Security dashboard
+#      └── summary → prints image ref + verify command for reviewer
+#      (sign is skipped on MRs — only signed images land on main)
+#
+#   3. PUSH TO MAIN (after MR merged)
+#      └── build  → pushes :sha-<sha> + :latest
+#      └── scan   → Trivy scan
+#      └── sign   → Cosign keyless signature stored in registry
+#      └── summary → final image ref + verify command
+#
+#   4. SEMVER TAG (v*.*.*)
+#      └── build  → pushes :sha-<sha> + :vX.Y.Z + :X.Y
+#      └── scan + sign + summary
+#
+# workflow: rules prevent duplicate pipelines — a branch push that already
+# has an open MR runs only the MR pipeline, not also a branch pipeline.
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
 stages:
   - build
@@ -178,5 +199,6 @@ summary:
       echo "    --certificate-oidc-issuer \"https://gitlab.com\" \\"
       echo "    $IMAGE_NAME@$IMAGE_DIGEST"
   rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main"
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
