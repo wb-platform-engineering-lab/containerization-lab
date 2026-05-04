@@ -66,7 +66,7 @@ Developer pushes to main
     └── 4. sign job (Cosign — keyless)
             ├── GitLab OIDC token (id_tokens:) → Fulcio CA → short-lived certificate
             ├── Certificate proves: this signature was created by
-            │   project_path:org/repo, ref_type:branch, ref:main
+            │   https://gitlab.com/org/repo//.gitlab-ci.yml@refs/heads/main
             └── Signature stored in Rekor transparency log (public, tamper-evident)
 
 
@@ -499,11 +499,13 @@ id_tokens:
 
 This is the GitLab CI equivalent of GitHub's `id-token: write` permission. It requests a short-lived OIDC JWT with audience `sigstore`, which Cosign uses to obtain a Fulcio certificate — no private key required.
 
-The certificate identity is bound to the job's GitLab identity:
+The certificate identity is bound to the job's GitLab identity. In Cosign v2+, the SAN in the Fulcio certificate uses the HTTPS URI format:
 
 ```
-project_path:YOUR_NAMESPACE/containerization-lab:ref_type:branch:ref:main
+https://gitlab.com/YOUR_NAMESPACE/containerization-lab//.gitlab-ci.yml@refs/heads/main
 ```
+
+Note the double `//` — this comes from the OIDC token's `sub` claim and is intentional.
 
 This is the key difference between signing locally (you authenticate via browser) and signing in CI (the job authenticates via OIDC token, no human in the loop).
 
@@ -571,7 +573,7 @@ DIGEST=$(crane digest $IMAGE:latest)
 
 cosign verify \
   --certificate-identity-regexp \
-    "^project_path:YOUR_NAMESPACE/containerization-lab:.*" \
+    "^https://gitlab\.com/YOUR_NAMESPACE/containerization-lab/.*@refs/heads/main$" \
   --certificate-oidc-issuer "https://gitlab.com" \
   $IMAGE@$DIGEST
 ```

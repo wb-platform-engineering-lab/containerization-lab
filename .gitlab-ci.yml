@@ -119,7 +119,7 @@ sign:
     - |
       cosign verify \
         --certificate-identity-regexp \
-          "^project_path:$CI_PROJECT_PATH:ref_type:branch:ref:$CI_COMMIT_REF_NAME$" \
+          "^https://gitlab\\.com/$CI_PROJECT_PATH/.*@refs/heads/$CI_COMMIT_REF_NAME$" \
         --certificate-oidc-issuer "https://gitlab.com" \
         $IMAGE_NAME@$IMAGE_DIGEST
   needs:
@@ -152,7 +152,7 @@ summary:
       echo ""
       echo "Verify:"
       echo "  cosign verify \\"
-      echo "    --certificate-identity-regexp \"^project_path:$CI_PROJECT_PATH:.*\" \\"
+      echo "    --certificate-identity-regexp \"^https://gitlab\\.com/$CI_PROJECT_PATH/.*@refs/heads/$CI_COMMIT_REF_NAME\$\" \\"
       echo "    --certificate-oidc-issuer \"https://gitlab.com\" \\"
       echo "    $IMAGE_NAME@$IMAGE_DIGEST"
   rules:
