@@ -79,6 +79,7 @@ scan:
       trivy image \
         --severity CRITICAL,HIGH \
         --exit-code 1 \
+        --ignore-unfixed \
         --format sarif \
         --output trivy-results.sarif \
         $IMAGE_NAME@$IMAGE_DIGEST

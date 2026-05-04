@@ -148,10 +148,10 @@ cat nexio-api.sbom.spdx.json | jq '.packages[0:3] | .[] | {name: .name, versionI
 ### Step 1: Run a targeted scan
 
 ```bash
-trivy image --severity CRITICAL,HIGH --exit-code 1 nexio-api:0.4
+trivy image --severity CRITICAL,HIGH --exit-code 1 --ignore-unfixed nexio-api:0.4
 ```
 
-`--exit-code 1` causes Trivy to exit with code 1 if any findings match the severity filter. In CI, a non-zero exit code fails the step — the image is never pushed.
+`--exit-code 1` causes Trivy to exit with code 1 if any findings match the severity filter — the image is never pushed. `--ignore-unfixed` restricts this to vulnerabilities that have a fix available: OS-level CVEs in the base image are often reported as CRITICAL but have no upstream patch yet, and blocking on those would make the pipeline permanently red through no fault of your code.
 
 ### Step 2: Simulate a vulnerable image
 
