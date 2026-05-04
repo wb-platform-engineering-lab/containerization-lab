@@ -1,6 +1,8 @@
 # Phase 6 — Registry & Image Lifecycle Management
 
-> **Concepts introduced:** Tagging strategy, image promotion, `crane`, `skopeo`, registry retention policies, multi-arch manifest inspection
+> **Concepts introduced:** Tagging strategy, image promotion, `crane`, `skopeo`, GitLab Container Registry cleanup policies, multi-arch manifest inspection
+>
+> **CI/CD:** GitLab CI (`.gitlab-ci.yml`)
 
 ---
 
@@ -9,10 +11,10 @@
 | Concept | What it is | Why it matters |
 |---|---|---|
 | **Tagging strategy** | The scheme for naming image versions in a registry | Mutable tags (`:latest`) mislead; immutable tags (`:sha-abc123`) make deployments reproducible |
-| **Image promotion** | Moving the same image digest from one tag/repo to another | The same bytes go from dev → staging → prod without a rebuild |
+| **Image promotion** | Moving the same image digest from one tag/repo to another without a rebuild | The same bytes go from dev → staging → prod — no "works in staging" surprises |
 | **`crane`** | A CLI for interacting with container registries | Copy, list, delete, and inspect images without pulling them to disk |
 | **`skopeo`** | An alternative CLI for registry inspection and copying | Works without a Docker daemon; great for CI and policy auditing |
-| **Retention policy** | Rules that automatically delete old images from a registry | Without policies, tag counts grow unbounded and storage costs compound |
+| **Cleanup policy** | Rules that automatically delete old images from a registry | Without policies, tag counts grow unbounded and storage costs compound |
 | **Multi-arch manifest** | A manifest list pointing to per-platform image manifests | `docker pull` automatically serves the right variant for the host architecture |
 
 ---
@@ -21,7 +23,7 @@
 
 > *Nexio — 40 engineers. Six months in.*
 >
-> The platform team opened the GHCR billing dashboard for the first time in six months.
+> The platform team opened the GitLab Container Registry storage page for the first time in six months.
 >
 > 4,312 image tags. €290/month in storage.
 >
@@ -38,7 +40,7 @@
 ```
 Tagging strategy
 ────────────────────────────────────────────────────────────────────
-  Every push:
+  Every push to any branch:
     nexio-api:sha-a1b2c3d    ← immutable, pinned to exact bytes
                                 Use this in deployment manifests
 
@@ -53,19 +55,26 @@ Tagging strategy
 
 Promotion workflow
 ────────────────────────────────────────────────────────────────────
-  Build once → push :sha-a1b2c3d to dev registry
-  Test passes → crane copy :sha-a1b2c3d to staging registry
-  Staging passes → crane copy :sha-a1b2c3d to prod registry
+  Build once → push :sha-a1b2c3d to registry (dev path)
+  Test passes → crane copy :sha-a1b2c3d to staging path
+  Staging passes → crane copy :sha-a1b2c3d to prod path
 
   Same digest at every stage. No rebuilds. No "works in staging" surprises.
 
+  registry.gitlab.com/YOUR_NAMESPACE/containerization-lab/nexio-api-dev:sha-a1b2c3d
+          ↓  crane copy (no bytes transferred to your machine)
+  registry.gitlab.com/YOUR_NAMESPACE/containerization-lab/nexio-api-staging:sha-a1b2c3d
+          ↓  crane copy
+  registry.gitlab.com/YOUR_NAMESPACE/containerization-lab/nexio-api:sha-a1b2c3d
 
-Retention policy
+
+Cleanup policy (GitLab built-in)
 ────────────────────────────────────────────────────────────────────
-  Keep: last 10 tags per image
-  Keep: any tag matching v*.*.* (semver releases)
-  Delete: untagged (dangling) manifests older than 7 days
+  Keep: tags matching v*.*.* (semver releases)
+  Keep: tags matching main (latest main branch build)
   Delete: sha-* tags older than 90 days
+  Delete: untagged (dangling) manifests older than 7 days
+  Schedule: daily at 01:00 UTC
 ```
 
 ---
@@ -81,7 +90,7 @@ phase-6-registry/
     └── requirements.txt
 ```
 
-This phase is primarily about registry tooling, not Dockerfile changes.
+This phase is primarily about registry tooling and lifecycle policy, not Dockerfile changes.
 
 ---
 
@@ -90,13 +99,12 @@ This phase is primarily about registry tooling, not Dockerfile changes.
 ### Step 1: Demonstrate the `:latest` problem
 
 ```bash
-# Push two different images under :latest
+# Build the image
 docker build -t nexio-api:latest phase-6-registry/app/
 docker inspect nexio-api:latest --format '{{.Id}}'
 # sha256:aaaa...
 
-# Make a trivial change — add a space to a comment in app.py
-# (or just rebuild with --no-cache)
+# Rebuild with --no-cache (simulates a new commit changing nothing visible)
 docker build --no-cache -t nexio-api:latest phase-6-registry/app/
 docker inspect nexio-api:latest --format '{{.Id}}'
 # sha256:bbbb...  ← different ID, same tag
@@ -125,24 +133,31 @@ docker images nexio-api
 # Check what digest the SHA tag resolves to
 docker inspect nexio-api:sha-$SHORT_SHA --format '{{.Id}}'
 
-# In promotion, you copy the digest — not the image bytes — to a new tag
+# In promotion, you copy the digest — not image bytes — to a new tag
 # crane copy src:tag dst:tag  (see Challenge 3)
 ```
 
 ---
 
-## Challenge 2 — Push to GHCR with a proper tagging strategy
+## Challenge 2 — Push to the GitLab Container Registry with a proper tagging strategy
 
-### Step 1: Log in to GHCR
+### Step 1: Authenticate
+
+The GitLab Container Registry uses your GitLab credentials. Use the PAT you created in Phase 5 (scopes: `read_registry`, `write_registry`). If you need a new one, follow the same steps as Phase 5 Challenge 3 Step 2.
 
 ```bash
-echo $GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+export GL_PAT=glpat-xxxxxxxxxxxxxxxxxxxx
+
+echo $GL_PAT | docker login registry.gitlab.com \
+  -u YOUR_GITLAB_USERNAME \
+  --password-stdin
+# Login Succeeded
 ```
 
 ### Step 2: Tag and push with all three tag types
 
 ```bash
-REGISTRY=ghcr.io/YOUR_USERNAME
+REGISTRY=registry.gitlab.com/YOUR_NAMESPACE/containerization-lab
 SHORT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "dev")
 VERSION="0.6.0"
 
@@ -152,7 +167,7 @@ docker build \
   -t $REGISTRY/nexio-api:sha-$SHORT_SHA \
   phase-6-registry/app/
 
-# Tag the same image with additional names (no rebuild)
+# Tag the same image with additional names — no rebuild, no extra storage
 docker tag $REGISTRY/nexio-api:sha-$SHORT_SHA $REGISTRY/nexio-api:latest
 docker tag $REGISTRY/nexio-api:sha-$SHORT_SHA $REGISTRY/nexio-api:v$VERSION
 
@@ -162,22 +177,35 @@ docker push $REGISTRY/nexio-api:latest
 docker push $REGISTRY/nexio-api:v$VERSION
 ```
 
-All three tags point to the **same image digest** — they are different names for the same bytes. No storage is duplicated.
+All three tags point to the **same image digest** — different names for the same bytes. The registry stores the manifest once and creates tag references.
 
-### Step 3: Verify in the registry
+### Step 3: Verify in the GitLab UI
+
+Navigate to your project in GitLab → **Deploy → Container Registry**.
+
+You will see `nexio-api` with three tags. Click into the image to confirm all three tags share the same digest.
+
+### Step 4: Verify with the CLI
 
 ```bash
-docker manifest inspect $REGISTRY/nexio-api:sha-$SHORT_SHA | jq '.schemaVersion'
-docker manifest inspect $REGISTRY/nexio-api:latest | jq '.schemaVersion'
-```
+REGISTRY=registry.gitlab.com/YOUR_NAMESPACE/containerization-lab
+SHORT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "dev")
 
-Both manifests should resolve to the same `sha256` content digest.
+D1=$(crane digest $REGISTRY/nexio-api:sha-$SHORT_SHA)
+D2=$(crane digest $REGISTRY/nexio-api:latest)
+D3=$(crane digest $REGISTRY/nexio-api:v0.6.0)
+
+echo "sha tag: $D1"
+echo "latest:  $D2"
+echo "semver:  $D3"
+[ "$D1" = "$D2" ] && [ "$D1" = "$D3" ] && echo "ALL SAME" || echo "MISMATCH"
+```
 
 ---
 
 ## Challenge 3 — Inspect and manage images with `crane`
 
-`crane` is a lightweight CLI for registry operations. It works without a Docker daemon — useful in environments where Docker is not installed, and faster than pulling images for inspection.
+`crane` is a lightweight CLI for registry operations. It works without a Docker daemon — useful in CI and in environments where Docker is not running.
 
 ### Step 1: Install crane
 
@@ -190,10 +218,19 @@ curl -sL https://github.com/google/go-containerregistry/releases/latest/download
   | tar -xz -C /usr/local/bin crane
 ```
 
+Authenticate crane with the same PAT:
+
+```bash
+crane auth login registry.gitlab.com \
+  -u YOUR_GITLAB_USERNAME \
+  -p $GL_PAT
+```
+
 ### Step 2: List all tags for an image
 
 ```bash
-crane ls ghcr.io/YOUR_USERNAME/nexio-api
+REGISTRY=registry.gitlab.com/YOUR_NAMESPACE/containerization-lab
+crane ls $REGISTRY/nexio-api
 ```
 
 Expected output:
@@ -206,7 +243,8 @@ v0.6.0
 ### Step 3: Inspect the manifest without pulling
 
 ```bash
-crane manifest ghcr.io/YOUR_USERNAME/nexio-api:sha-$SHORT_SHA | jq '{
+SHORT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "dev")
+crane manifest $REGISTRY/nexio-api:sha-$SHORT_SHA | jq '{
   mediaType: .mediaType,
   digest: .config.digest,
   size: .config.size,
@@ -214,38 +252,45 @@ crane manifest ghcr.io/YOUR_USERNAME/nexio-api:sha-$SHORT_SHA | jq '{
 }'
 ```
 
-### Step 4: Copy an image between registries (promotion)
+### Step 4: Simulate image promotion with `crane copy`
+
+`crane copy` transfers manifest and layers directly between registry paths — the image bytes never touch your machine.
 
 ```bash
-# Promote from dev registry to a staging repository — no pull, no push of bytes
+# Simulate promoting from the dev path to a staging path
 crane copy \
-  ghcr.io/YOUR_USERNAME/nexio-api:sha-$SHORT_SHA \
-  ghcr.io/YOUR_USERNAME/nexio-api-staging:sha-$SHORT_SHA
+  $REGISTRY/nexio-api:sha-$SHORT_SHA \
+  $REGISTRY/nexio-api-staging:sha-$SHORT_SHA
+
+# Confirm the staging path now exists
+crane ls $REGISTRY/nexio-api-staging
 ```
 
-`crane copy` transfers the manifest and layers directly between registries server-to-server. The image is never downloaded to your machine. This is how immutable image promotion works in practice.
+The digest is identical — same image, new registry path. This is how you guarantee staging and production run exactly what was tested.
 
 ### Step 5: Delete a tag
 
 ```bash
-crane delete ghcr.io/YOUR_USERNAME/nexio-api:sha-oldhash
+# Delete the staging tag after testing
+crane delete $REGISTRY/nexio-api-staging:sha-$SHORT_SHA
 ```
 
-Deletes only the tag — not the underlying manifest, if other tags still reference it.
+Deletes only the tag reference. The underlying manifest remains if other tags still point to it.
 
 ---
 
 ## Challenge 4 — Inspect multi-arch manifests
 
-A multi-arch manifest (built with `docker buildx` in Phase 4) is a manifest list — it points to per-platform image manifests, not to an image directly.
+A multi-arch manifest (built with `docker buildx` in Phase 4) is a manifest list — it points to per-platform image manifests rather than to an image directly.
 
 ### Step 1: Inspect a multi-arch manifest
 
 ```bash
-crane manifest ghcr.io/YOUR_USERNAME/nexio-api:sha-$SHORT_SHA | jq '.'
+REGISTRY=registry.gitlab.com/YOUR_NAMESPACE/containerization-lab
+crane manifest $REGISTRY/nexio-api:sha-$SHORT_SHA | jq '.'
 ```
 
-If the image was built with `--platform linux/amd64,linux/arm64`, the output will be a manifest list:
+If the image was built with `--platform linux/amd64,linux/arm64`, the output is a manifest list:
 
 ```json
 {
@@ -269,7 +314,7 @@ If the image was built with `--platform linux/amd64,linux/arm64`, the output wil
 
 ```bash
 crane manifest --platform linux/amd64 \
-  ghcr.io/YOUR_USERNAME/nexio-api:sha-$SHORT_SHA | jq '{
+  $REGISTRY/nexio-api:sha-$SHORT_SHA | jq '{
   layers: [.layers[] | {digest: .digest, size: .size}]
 }'
 ```
@@ -278,7 +323,7 @@ crane manifest --platform linux/amd64 \
 
 ## Challenge 5 — Inspect the registry with `skopeo`
 
-`skopeo` is a complementary tool to `crane` — particularly useful for copying between registries with different authentication schemes, and for inspecting images without pulling.
+`skopeo` complements `crane` — particularly useful for copying between registries with different authentication schemes and for inspecting raw image metadata.
 
 ### Step 1: Install skopeo
 
@@ -293,7 +338,12 @@ sudo apt-get install skopeo
 ### Step 2: Inspect image metadata
 
 ```bash
-skopeo inspect docker://ghcr.io/YOUR_USERNAME/nexio-api:sha-$SHORT_SHA
+REGISTRY=registry.gitlab.com/YOUR_NAMESPACE/containerization-lab
+SHORT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "dev")
+
+skopeo inspect \
+  --creds YOUR_GITLAB_USERNAME:$GL_PAT \
+  docker://$REGISTRY/nexio-api:sha-$SHORT_SHA
 ```
 
 Returns image labels, environment variables, created timestamp, and layer digests — without pulling the image.
@@ -301,71 +351,204 @@ Returns image labels, environment variables, created timestamp, and layer digest
 ### Step 3: Compare two image digests
 
 ```bash
-# Get digest of sha tag
-D1=$(skopeo inspect docker://ghcr.io/YOUR_USERNAME/nexio-api:sha-$SHORT_SHA \
-  --format '{{.Digest}}')
+D1=$(skopeo inspect \
+  --creds YOUR_GITLAB_USERNAME:$GL_PAT \
+  --format '{{.Digest}}' \
+  docker://$REGISTRY/nexio-api:sha-$SHORT_SHA)
 
-# Get digest of latest
-D2=$(skopeo inspect docker://ghcr.io/YOUR_USERNAME/nexio-api:latest \
-  --format '{{.Digest}}')
+D2=$(skopeo inspect \
+  --creds YOUR_GITLAB_USERNAME:$GL_PAT \
+  --format '{{.Digest}}' \
+  docker://$REGISTRY/nexio-api:latest)
 
 echo "sha-tag: $D1"
 echo "latest:  $D2"
 [ "$D1" = "$D2" ] && echo "SAME IMAGE" || echo "DIFFERENT IMAGES"
 ```
 
-This is how you verify that `:latest` and your SHA tag point to the same bytes after a push.
+This verifies that `:latest` and your SHA tag point to the same bytes after a push — before you promote to staging.
 
 ---
 
-## Challenge 6 — Configure a retention policy on GHCR
+## Challenge 6 — Configure a cleanup policy on the GitLab Container Registry
 
-GHCR (and most registries) accumulate untagged manifests — digests that are no longer referenced by any tag. These are "dangling" manifests, created when you overwrite a tag with a new build. They consume storage and serve no purpose.
+GitLab has a built-in container registry cleanup policy — no external tool or nightly GitHub Action required. It runs on a configurable schedule and deletes tags matching your rules.
 
-### Step 1: List untagged manifests
+### Step 1: Enable the cleanup policy via the GitLab UI
+
+1. Go to your project in GitLab
+2. Navigate to **Settings → Packages & Registries → Container Registry**
+3. Under **Clean up image tags**, click **Set cleanup rules**
+4. Configure:
+
+   | Setting | Value | Why |
+   |---------|-------|-----|
+   | Enable cleanup policy | On | |
+   | Run cleanup | Every day | |
+   | Remove tags older than | 90 days | Retains recent SHA tags |
+   | Remove tags matching | `sha-.*` | Targets CI-generated tags |
+   | Keep the most recent | 10 | Safety net |
+   | Keep tags matching | `v\d+\.\d+\.\d+` | Preserve semver releases |
+   | Keep tags matching | `main` | Preserve latest main build |
+
+5. Click **Save**
+
+GitLab runs the cleanup job on the schedule you set. No CI job required.
+
+### Step 2: Configure the same policy via the GitLab API
+
+For infrastructure-as-code and reproducibility, apply the same policy via the API:
 
 ```bash
-# List all manifests and find those with no tags
-crane ls ghcr.io/YOUR_USERNAME/nexio-api | grep "^sha256:"
-# These are untagged manifests — no human-readable name, but they take up storage
+# Replace YOUR_PROJECT_ID with the numeric project ID (visible on the project home page)
+PROJECT_ID=12345678
+
+curl --request PUT \
+  --header "PRIVATE-TOKEN: $GL_PAT" \
+  --header "Content-Type: application/json" \
+  --data '{
+    "container_expiration_policy_attributes": {
+      "enabled": true,
+      "cadence": "1d",
+      "older_than": "90d",
+      "keep_n": 10,
+      "name_regex": "sha-.*",
+      "name_regex_keep": "v\\d+\\.\\d+\\.\\d+|main"
+    }
+  }' \
+  "https://gitlab.com/api/v4/projects/$PROJECT_ID"
 ```
 
-### Step 2: Delete old SHA tags with crane
+Verify the policy was applied:
 
 ```bash
-# List all sha- tags older than a threshold and delete them
-# (In production, run this on a schedule in CI)
-crane ls ghcr.io/YOUR_USERNAME/nexio-api \
-  | grep "^sha-" \
-  | head -n -10 \
-  | xargs -I{} crane delete ghcr.io/YOUR_USERNAME/nexio-api:{}
+curl --header "PRIVATE-TOKEN: $GL_PAT" \
+  "https://gitlab.com/api/v4/projects/$PROJECT_ID" \
+  | jq '.container_expiration_policy'
 ```
 
-Keep the last 10 SHA tags; delete the rest.
-
-### Step 3: Set GHCR retention via the API (automated)
-
-GHCR does not yet have a built-in UI for retention policies (unlike AWS ECR or Artifact Registry). Use the GitHub API to delete old versions on a schedule:
+### Step 3: Manually trigger cleanup on demand
 
 ```bash
-# List all package versions for an image
-gh api \
-  /user/packages/container/nexio-api/versions \
-  --jq '.[] | {id: .id, name: .name, tags: .metadata.container.tags, updated: .updated_at}' \
-  | head -20
+# Trigger an immediate cleanup run via the API
+curl --request POST \
+  --header "PRIVATE-TOKEN: $GL_PAT" \
+  "https://gitlab.com/api/v4/projects/$PROJECT_ID/registry/repositories"
 ```
 
-In GitHub Actions, run a nightly workflow that calls this API to delete untagged versions older than 7 days:
+Or from the UI: **Deploy → Container Registry → image name → kebab menu → Delete tags by tag name pattern**.
+
+### Step 4: List and manually delete untagged manifests with crane
+
+Untagged manifests (dangling digests) are created when you push a new image under an existing tag. They have no human-readable name — just a `sha256:` reference:
+
+```bash
+REGISTRY=registry.gitlab.com/YOUR_NAMESPACE/containerization-lab
+
+# Untagged manifests show up as sha256: entries in crane ls
+crane ls $REGISTRY/nexio-api | grep "^sha256:"
+```
+
+Delete one manually:
+
+```bash
+crane delete $REGISTRY/nexio-api@sha256:FULL_DIGEST_HERE
+```
+
+The GitLab cleanup policy handles these automatically once configured.
+
+---
+
+## Challenge 7 — Promotion pipeline in GitLab CI
+
+The manual `crane copy` steps in Challenge 3 can be automated as a GitLab CI pipeline with environment-gated promotion.
+
+Add this job to your `.gitlab-ci.yml`:
 
 ```yaml
-- name: Delete old untagged image versions
-  uses: actions/delete-package-versions@v5
-  with:
-    package-name: nexio-api
-    package-type: container
-    min-versions-to-keep: 10
-    delete-only-untagged-versions: true
+variables:
+  REGISTRY: registry.gitlab.com/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME
+  IMAGE_DEV: $REGISTRY/nexio-api-dev
+  IMAGE_STAGING: $REGISTRY/nexio-api-staging
+  IMAGE_PROD: $REGISTRY/nexio-api
+
+stages:
+  - build
+  - promote-staging
+  - promote-prod
+
+build:
+  stage: build
+  image: docker:26
+  services:
+    - docker:26-dind
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - |
+      docker buildx build \
+        --platform linux/amd64 \
+        --build-arg APP_VERSION=$CI_COMMIT_SHORT_SHA \
+        --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+        -t $IMAGE_DEV:sha-$CI_COMMIT_SHORT_SHA \
+        --push \
+        phase-6-registry/app/
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+promote-to-staging:
+  stage: promote-staging
+  image: gcr.io/go-containerregistry/crane:latest
+  before_script:
+    - crane auth login $CI_REGISTRY -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD
+  script:
+    - |
+      crane copy \
+        $IMAGE_DEV:sha-$CI_COMMIT_SHORT_SHA \
+        $IMAGE_STAGING:sha-$CI_COMMIT_SHORT_SHA
+  environment:
+    name: staging
+  needs: [build]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+promote-to-prod:
+  stage: promote-prod
+  image: gcr.io/go-containerregistry/crane:latest
+  before_script:
+    - crane auth login $CI_REGISTRY -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD
+  script:
+    - |
+      crane copy \
+        $IMAGE_STAGING:sha-$CI_COMMIT_SHORT_SHA \
+        $IMAGE_PROD:sha-$CI_COMMIT_SHORT_SHA
+      # Also update the semver tag if this is a release
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        crane tag $IMAGE_PROD:sha-$CI_COMMIT_SHORT_SHA $CI_COMMIT_TAG
+      fi
+  environment:
+    name: production
+  needs: [promote-to-staging]
+  when: manual          # requires explicit approval to promote to prod
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
 ```
+
+Key points:
+- `CI_REGISTRY`, `CI_REGISTRY_USER`, `CI_REGISTRY_PASSWORD` are injected automatically by GitLab — no secrets to configure
+- `promote-to-prod` is `when: manual` — someone must click **Play** in the pipeline UI before the image reaches production
+- `crane copy` between paths in the same registry is near-instant (manifest copy, no layer transfer)
+
+### Protect semver tags in GitLab
+
+Prevent `v*.*.*` tags from being force-pushed or deleted:
+
+1. Go to **Settings → Repository → Protected tags**
+2. Add pattern: `v*.*.*`
+3. Set **Allowed to create**: Maintainers
+4. Save
+
+Once `v1.2.3` is pushed, it cannot be overwritten — immutable by policy, not just convention.
 
 ---
 
@@ -373,13 +556,16 @@ In GitHub Actions, run a nightly workflow that calls this API to delete untagged
 
 | Command | What it does |
 |---|---|
+| `crane auth login registry.gitlab.com -u USER -p TOKEN` | Authenticate crane with the GitLab registry |
 | `crane ls registry/image` | List all tags for an image |
 | `crane manifest registry/image:tag` | Inspect the manifest without pulling |
-| `crane copy src:tag dst:tag` | Copy image between registries (server-to-server) |
-| `crane delete registry/image:tag` | Delete a tag |
 | `crane digest registry/image:tag` | Get the content digest for a tag |
-| `skopeo inspect docker://registry/image:tag` | Inspect image metadata |
-| `skopeo copy docker://src docker://dst` | Copy with authentication support |
+| `crane copy src:tag dst:tag` | Copy image between registries/paths (server-to-server) |
+| `crane tag registry/image:tag newtag` | Add a new tag to an existing image |
+| `crane delete registry/image:tag` | Delete a tag |
+| `crane delete registry/image@sha256:digest` | Delete an untagged manifest |
+| `skopeo inspect --creds USER:TOKEN docker://registry/image:tag` | Inspect image metadata |
+| `skopeo copy docker://src docker://dst` | Copy with full authentication support |
 
 ---
 
@@ -388,23 +574,23 @@ In GitHub Actions, run a nightly workflow that calls this API to delete untagged
 ### 1. Always deploy by digest in production
 `image: nexio-api:v1.2.3` can be rewritten. `image: nexio-api@sha256:abc123` cannot. In Kubernetes, pin pod specs to digests. The tag is a human-readable alias — the digest is the contract.
 
-### 2. Automate tag cleanup as part of the release process
-Storage costs compound silently. A nightly cleanup job is not optional — it is infrastructure hygiene. Treat old image tags like old log files: retain what you need, delete what you don't, on a schedule.
+### 2. Enable the GitLab cleanup policy on day one
+Storage costs compound silently. GitLab's built-in cleanup policy requires no external tooling — enable it when you create the registry, not after 4,000 tags have accumulated. Start conservative (keep 10, delete after 90 days) and tighten as your team builds confidence.
 
 ### 3. Never use `:latest` in a deployment script, runbook, or incident playbook
 `:latest` at incident time means you do not know which image is running. Every deployment command in every document should reference an immutable identifier. Update your runbooks as part of this phase.
 
-### 4. Use separate repositories for dev, staging, and production
-`nexio-api-dev`, `nexio-api-staging`, `nexio-api` in GHCR. IAM policies restrict who can push to prod. Promotion (`crane copy`) is the only way to move an image from staging to prod — not a new build, not a manual push.
+### 4. Use separate registry paths for dev, staging, and production
+`nexio-api-dev`, `nexio-api-staging`, `nexio-api` within the same GitLab project registry. Access tokens or CI variables restrict who can push to the prod path. `crane copy` is the only way to move an image from staging to prod — not a new build, not a manual push.
 
 ### 5. Protect semver tags
-On GitHub, set a branch/tag protection rule that prevents force-pushing to `v*.*.*` tags. Once `v1.2.3` is pushed, it should be immutable by policy — not just by convention.
+Set a protected tag rule (`v*.*.*`) in **Settings → Repository → Protected tags** so that once `v1.2.3` is pushed, it cannot be overwritten or deleted. Immutable by policy, not by convention.
 
 ---
 
 ## Outcome
 
-Every image in the registry is tagged with a short commit SHA (immutable) and optionally a semver version (human-readable). Deployments reference SHA digests. Promotions use `crane copy` — no rebuilds, the same bytes move from dev to staging to prod. A nightly job removes untagged manifests and old SHA tags. Storage costs are predictable.
+Every image in the GitLab Container Registry is tagged with a short commit SHA (immutable) and optionally a semver version (human-readable). Deployments reference SHA digests. Promotions use `crane copy` — no rebuilds, the same bytes move from dev to staging to prod via a GitLab CI pipeline with a manual gate before production. A daily GitLab cleanup policy removes untagged manifests and SHA tags older than 90 days. Storage costs are predictable.
 
 ---
 
