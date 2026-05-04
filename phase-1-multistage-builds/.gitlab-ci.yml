@@ -1,0 +1,34 @@
+# Phase 1 — Renovate: automated Dockerfile digest bumps
+#
+# Renovate scans the whole repository for pinned digests and opens a merge
+# request whenever a newer digest is available for a base image.
+#
+# This job belongs in the ROOT .gitlab-ci.yml, not in a phase-specific file,
+# because Renovate operates on the entire repository.  This file exists as
+# the documented reference — the root pipeline includes the actual job.
+#
+# To activate:
+#   1. Add RENOVATE_TOKEN to CI/CD variables (GitLab PAT with api,
+#      read_repository, write_repository scopes — see Challenge 7 Step 3)
+#   2. Copy this job into the root .gitlab-ci.yml
+#   3. Create a scheduled pipeline: CI/CD → Schedules
+#      Interval: 0 5 * * 1  (Monday 05:00 UTC)
+#      Source:   schedule
+#
+# renovate.json at the repo root controls which files Renovate touches
+# and how it formats the merge requests.
+
+renovate:
+  stage: .pre
+  image: renovate/renovate:38    # pin to major version — Renovate releases frequently
+  variables:
+    RENOVATE_PLATFORM:      gitlab
+    RENOVATE_ENDPOINT:      https://gitlab.com/api/v4
+    RENOVATE_TOKEN:         $RENOVATE_TOKEN   # PAT set in CI/CD → Variables
+    RENOVATE_AUTODISCOVER:  "false"           # only scan this repo, not all repos the token can see
+    LOG_LEVEL:              info
+  script:
+    - renovate $CI_PROJECT_PATH
+  rules:
+    # Only run on scheduled pipelines — not on every push
+    - if: $CI_PIPELINE_SOURCE == "schedule"

@@ -5,12 +5,34 @@
 # and runs automatically on every push to main and on semver release tags.
 #
 # See phase-10-capstone/README.md for the full walkthrough.
+#
+# Also includes:
+#   renovate — scheduled job (Monday 05:00 UTC) that opens MRs for
+#              Dockerfile digest bumps via Renovate bot.
+#              Requires RENOVATE_TOKEN CI/CD variable (see phase-1 Challenge 7).
 
 stages:
   - build
   - scan
   - sign
   - summary
+
+# ── Renovate — automated digest bumps ─────────────────────────────────────────
+# Runs only on scheduled pipelines. Create a schedule at:
+#   CI/CD → Schedules → New schedule → Interval: 0 5 * * 1
+renovate:
+  stage: .pre
+  image: renovate/renovate:38
+  variables:
+    RENOVATE_PLATFORM:      gitlab
+    RENOVATE_ENDPOINT:      https://gitlab.com/api/v4
+    RENOVATE_TOKEN:         $RENOVATE_TOKEN
+    RENOVATE_AUTODISCOVER:  "false"
+    LOG_LEVEL:              info
+  script:
+    - renovate $CI_PROJECT_PATH
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
 
 variables:
   IMAGE_NAME: $CI_REGISTRY_IMAGE/nexio-api

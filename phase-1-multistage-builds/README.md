@@ -79,6 +79,7 @@ Phase 1 — multi-stage build
 
 ```
 phase-1-multistage-builds/
+├── .gitlab-ci.yml    ← Renovate job reference (active job is in root .gitlab-ci.yml)
 └── app/
     ├── Dockerfile        ← two-stage optimized build
     ├── .dockerignore     ← excludes __pycache__, .git, .venv, etc.
@@ -517,38 +518,42 @@ git commit -m "chore: add Renovate config for Dockerfile digest pinning"
 git push origin main && git push gitlab main
 ```
 
-### Step 3: Run Renovate as a scheduled GitLab CI job
+### Step 3: Activate the Renovate job in GitLab CI
 
-Renovate on GitLab runs as a CI job. Add this job to your `.gitlab-ci.yml`:
+The Renovate job lives in the root `.gitlab-ci.yml` because it operates on the whole repository — not just phase-1. The reference file is at `phase-1-multistage-builds/.gitlab-ci.yml`.
 
-```yaml
-renovate:
-  stage: .pre
-  image: renovate/renovate:latest
-  variables:
-    RENOVATE_PLATFORM: gitlab
-    RENOVATE_ENDPOINT: https://gitlab.com/api/v4
-    RENOVATE_TOKEN: $RENOVATE_TOKEN   # GitLab PAT — set in CI/CD variables
-    LOG_LEVEL: debug
-  script:
-    - renovate $CI_PROJECT_PATH
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-```
+The job is already present in the root pipeline. To activate it you need two things:
 
 **Create the GitLab PAT for Renovate:**
 
 1. Go to **GitLab → your avatar → Edit profile → Access tokens**
-2. Create a token named `renovate-bot` with scopes: `api`, `read_repository`, `write_repository`
+2. Create a token named `renovate-bot` with these scopes:
+
+   | Scope | Why |
+   |-------|-----|
+   | `api` | Create and update merge requests |
+   | `read_repository` | Read the repository to find Dockerfiles |
+   | `write_repository` | Push the digest-bump commits to MR branches |
+
 3. Go to your project → **Settings → CI/CD → Variables**
-4. Add variable `RENOVATE_TOKEN` = the token, marked **Protected** and **Masked**
+4. Add variable `RENOVATE_TOKEN` = the token value, marked **Protected** and **Masked**
 
 **Create the scheduled pipeline:**
 
 1. Go to **CI/CD → Schedules → New schedule**
 2. Description: `Renovate — weekly digest check`
 3. Interval: `0 5 * * 1` (Monday at 05:00 UTC)
-4. Save
+4. Target branch: `main`
+5. Save
+
+Key job variables explained:
+
+| Variable | Value | Why |
+|----------|-------|-----|
+| `RENOVATE_PLATFORM` | `gitlab` | Tells Renovate which API to use |
+| `RENOVATE_ENDPOINT` | `https://gitlab.com/api/v4` | GitLab API base URL |
+| `RENOVATE_AUTODISCOVER` | `false` | Only scan this repo — prevents Renovate from touching every repo the token can see |
+| Image tag | `renovate/renovate:38` | Pinned to major version — Renovate releases very frequently and `latest` can introduce breaking config changes |
 
 ### Step 4: Understand what Renovate does on first run
 
