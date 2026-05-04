@@ -343,8 +343,12 @@ SHORT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "dev")
 
 skopeo inspect \
   --creds YOUR_GITLAB_USERNAME:$GL_PAT \
+  --override-os linux \
+  --override-arch amd64 \
   docker://$REGISTRY/nexio-api:sha-$SHORT_SHA
 ```
+
+> **macOS note:** without `--override-os linux --override-arch amd64`, skopeo attempts to find a `darwin/arm64` variant in the manifest index and fails with `no image found in image index for architecture "arm64", variant "v8", OS "darwin"`. The flags tell it to inspect the `linux/amd64` manifest instead, which is what you actually want to audit.
 
 Returns image labels, environment variables, created timestamp, and layer digests — without pulling the image.
 
@@ -353,11 +357,13 @@ Returns image labels, environment variables, created timestamp, and layer digest
 ```bash
 D1=$(skopeo inspect \
   --creds YOUR_GITLAB_USERNAME:$GL_PAT \
+  --override-os linux --override-arch amd64 \
   --format '{{.Digest}}' \
   docker://$REGISTRY/nexio-api:sha-$SHORT_SHA)
 
 D2=$(skopeo inspect \
   --creds YOUR_GITLAB_USERNAME:$GL_PAT \
+  --override-os linux --override-arch amd64 \
   --format '{{.Digest}}' \
   docker://$REGISTRY/nexio-api:latest)
 
@@ -564,7 +570,7 @@ Once `v1.2.3` is pushed, it cannot be overwritten — immutable by policy, not j
 | `crane tag registry/image:tag newtag` | Add a new tag to an existing image |
 | `crane delete registry/image:tag` | Delete a tag |
 | `crane delete registry/image@sha256:digest` | Delete an untagged manifest |
-| `skopeo inspect --creds USER:TOKEN docker://registry/image:tag` | Inspect image metadata |
+| `skopeo inspect --creds USER:TOKEN --override-os linux --override-arch amd64 docker://registry/image:tag` | Inspect image metadata (macOS-safe) |
 | `skopeo copy docker://src docker://dst` | Copy with full authentication support |
 
 ---
