@@ -79,13 +79,13 @@ scan:
       trivy image \
         --severity CRITICAL,HIGH \
         --exit-code 1 \
-        --format gitlab \
-        --output gl-container-scanning-report.json \
+        --format sarif \
+        --output trivy-results.sarif \
         $IMAGE_NAME@$IMAGE_DIGEST
   artifacts:
     # Results appear in GitLab → Security → Vulnerability report
     reports:
-      container_scanning: gl-container-scanning-report.json
+      sast: trivy-results.sarif
     when: always   # upload even when the scan step fails
   needs:
     - job: build

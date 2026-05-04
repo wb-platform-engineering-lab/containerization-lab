@@ -174,7 +174,7 @@ echo "Exit code: $?"
 
 ### Step 3: Understand the SARIF output format
 
-SARIF is a standard format for security tool output. GitLab's native format is `--format gitlab`, but SARIF is useful if you ever need to integrate with other tools:
+SARIF is the format used in CI for uploading results to GitLab's Security dashboard (`--format gitlab` was removed from Trivy in v0.50):
 
 ```bash
 trivy image --severity CRITICAL,HIGH \
@@ -186,7 +186,7 @@ cat trivy-results.sarif | jq '.runs[0].results | length'
 # 0 — no findings
 ```
 
-In CI, Trivy runs with `--format gitlab` which produces a GitLab container scanning report. The report is uploaded as a `container_scanning` artifact and appears in **GitLab → Security → Vulnerability report**, grouped by severity, with links to CVE details.
+In CI, Trivy runs with `--format sarif` and the output is uploaded as a `sast` artifact. It appears in **GitLab → Security → Vulnerability report**, grouped by severity, with links to CVE details. (`--format gitlab` was removed from Trivy in v0.50; SARIF is the current supported path for GitLab Security dashboard integration.)
 
 ---
 
@@ -629,7 +629,7 @@ The pipeline goes green, the image is signed, and the revert is in git history �
 | `trivy image name:tag` | Vulnerability scan |
 | `trivy image --format cyclonedx -o sbom.json name:tag` | Generate CycloneDX SBOM |
 | `trivy image --format spdx-json -o sbom.spdx.json name:tag` | Generate SPDX SBOM |
-| `trivy image --format gitlab -o gl-container-scanning-report.json name:tag` | GitLab container scanning report |
+| `trivy image --format sarif -o trivy-results.sarif name:tag` | GitLab Security dashboard report (upload as `sast` artifact) |
 | `cosign generate-key-pair` | Generate a local key pair (cosign.key + cosign.pub) |
 | `cosign sign --key cosign.key --tlog-upload=false image@digest` | Key-based sign, no Rekor upload (private infra) |
 | `cosign verify --key cosign.pub --insecure-ignore-tlog image@digest` | Verify a key-based signature |
