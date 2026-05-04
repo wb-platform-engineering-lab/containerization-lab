@@ -263,51 +263,114 @@ echo $DIGEST
 
 > **Why sign by digest, not tag?** Tags are mutable — `nexio-api:0.4` can be overwritten at any time. A digest (`sha256:abc123`) is immutable and uniquely identifies the exact bytes. Signing by digest creates an unforgeable link between the signature and those specific bytes.
 
-### Step 3: Sign with keyless Cosign
+### Step 3: Generate a local key pair
+
+For private infrastructure you sign with your own key pair instead of delegating to
+Fulcio (Sigstore's public CA) or recording anything in Rekor (Sigstore's public
+transparency log). No browser, no OIDC, no outbound network calls beyond pushing
+the signature to your own registry.
 
 ```bash
-cosign sign --yes $DIGEST
+cosign generate-key-pair
 ```
 
-Cosign will:
-1. Open a browser for OIDC authentication (Google, GitHub, or Microsoft identity)
-2. Receive a short-lived certificate from **Fulcio** (Sigstore's certificate authority) binding your identity to the signing key
-3. Create a signature and store it in the registry alongside the image
-4. Record the signature in **Rekor** (Sigstore's public transparency log)
+This creates two files in the current directory:
 
-### Step 4: Verify the signature
+| File | Contents | Who sees it |
+|------|----------|-------------|
+| `cosign.key` | Encrypted private key | Keep secret — treat like an SSH private key |
+| `cosign.pub` | Public key | Distribute freely — commit to the repo, embed in policy |
+
+You will be prompted for a passphrase to encrypt `cosign.key`. Use a strong passphrase
+in real environments. For the lab, pressing Enter twice (empty passphrase) is fine.
+
+> **Key storage in production:** store `cosign.key` in your secrets manager (GitLab
+> CI/CD variables marked *Protected + Masked*, HashiCorp Vault, AWS Secrets Manager).
+> Never commit it to the repository.
+
+### Step 4: Sign with the private key
 
 ```bash
-cosign verify \
-  --certificate-identity YOUR_EMAIL \
-  --certificate-oidc-issuer https://accounts.google.com \
+cosign sign \
+  --key cosign.key \
+  --tlog-upload=false \
   $DIGEST
 ```
 
-Expected:
+Flags:
+
+| Flag | Effect |
+|------|--------|
+| `--key cosign.key` | Use your local private key instead of Fulcio OIDC flow |
+| `--tlog-upload=false` | Do not upload an entry to Rekor — keeps the signature fully private |
+
+Cosign pushes the signature as an OCI artifact to your GitLab registry alongside the
+image. No request is made to any Sigstore service.
+
+Expected output:
+
 ```
-Verification for ghcr.io/YOUR_USERNAME/nexio-api@sha256:abc123 --
+Pushing signature to: registry.gitlab.com/YOUR_NAMESPACE/containerization-lab/nexio-api
+```
+
+### Step 5: Verify the signature
+
+```bash
+cosign verify \
+  --key cosign.pub \
+  --insecure-ignore-tlog \
+  $DIGEST
+```
+
+Flags:
+
+| Flag | Effect |
+|------|--------|
+| `--key cosign.pub` | Verify against your public key (no Fulcio certificate chain) |
+| `--insecure-ignore-tlog` | Do not require a Rekor entry — correct for key-based private signing |
+
+Expected output:
+
+```
+Verification for registry.gitlab.com/YOUR_NAMESPACE/containerization-lab/nexio-api@sha256:abc123 --
 The following checks were performed on each of these signatures:
   - The cosign claims were validated
-  - Existence of the claims in the transparency log was verified offline
-  - The code-signing certificate claims were validated
+  - The signatures were verified against the specified public key
 
-[{"critical":{"identity":{"docker-reference":"ghcr.io/..."},...}]
+[{"critical":{"identity":{"docker-reference":"registry.gitlab.com/..."},...}}]
 ```
+
+> **What the signature proves:** that whoever held `cosign.key` at signing time
+> approved this exact image digest. It does not prove *which person* signed it the way
+> an OIDC certificate does — identity is asserted by controlling the key, not by a CA.
+> This is acceptable for private infrastructure where you control the key distribution.
 
 ---
 
 ## Challenge 4 — Understand keyless signing and the Sigstore ecosystem
 
-### The problem with key-based signing
+Challenge 3 used key-based signing — the right choice for private infrastructure
+where no request should leave your network. The trade-off is key management: the
+private key must be stored securely, rotated, and protected from leakage. If it
+leaks, every signature it ever produced is suspect.
 
-Traditional image signing requires a private key. That key must be:
-- Generated and stored securely (HSM, key vault)
-- Rotated periodically
-- Protected from leakage (if it leaks, every signature it created is suspect)
-- Distributed to every verifier
+Keyless signing (the default in public CI/CD) eliminates the key entirely by
+replacing it with a short-lived certificate issued by Sigstore's public CA (Fulcio)
+bound to a verifiable OIDC identity — no key to rotate, no key to leak. The cost is
+that every signing event is recorded in a public transparency log (Rekor) and requires
+outbound access to Sigstore's infrastructure.
 
-Keyless signing eliminates the key.
+### Key-based vs keyless — when to use which
+
+| | Key-based (Challenge 3) | Keyless (this challenge) |
+|---|---|---|
+| External network | Registry only | Fulcio + Rekor + registry |
+| Identity proof | Whoever holds the key | OIDC (GitHub Actions, Google, etc.) |
+| Key management | Required | None (ephemeral cert) |
+| Signature auditability | Private | Public (Rekor log) |
+| Right for | Private infra, air-gapped, self-hosted | Public OSS, SaaS CI/CD |
+
+### How Sigstore keyless signing works
 
 ### How Sigstore keyless signing works
 
@@ -564,8 +627,11 @@ The pipeline goes green, the image is signed, and the revert is in git history �
 | `trivy image --format cyclonedx -o sbom.json name:tag` | Generate CycloneDX SBOM |
 | `trivy image --format spdx-json -o sbom.spdx.json name:tag` | Generate SPDX SBOM |
 | `trivy image --format gitlab -o gl-container-scanning-report.json name:tag` | GitLab container scanning report |
-| `cosign sign --yes image@digest` | Keyless sign (keyless via OIDC) |
-| `cosign verify --certificate-identity ... image@digest` | Verify a signature |
+| `cosign generate-key-pair` | Generate a local key pair (cosign.key + cosign.pub) |
+| `cosign sign --key cosign.key --tlog-upload=false image@digest` | Key-based sign, no Rekor upload (private infra) |
+| `cosign verify --key cosign.pub --insecure-ignore-tlog image@digest` | Verify a key-based signature |
+| `cosign sign --yes image@digest` | Keyless sign via OIDC + Fulcio (public CI/CD) |
+| `cosign verify --certificate-identity ... image@digest` | Verify a keyless signature |
 | `cosign download attestation image:tag` | Download attached attestations |
 | `cosign verify-attestation --type cyclonedx ...` | Verify an SBOM attestation |
 | `cosign triangulate image@digest` | Get the Rekor UUID for a signature |
