@@ -592,9 +592,10 @@ After the initial pinning, Renovate's weekly job:
 Monday 05:00  Renovate runs
               └── python:3.12-slim has a new digest (CVE patched upstream)
                   └── MR opened: "fix(deps): pin python:3.12-slim digest"
-                      └── Pipeline: build ✓  scan ✓  sign ✓
+                      └── MR pipeline: build ✓  scan ✓  summary ✓  (sign skipped — MR only)
                           └── You review + merge
-                              └── Production now runs the patched base image
+                              └── Main pipeline: build ✓  scan ✓  sign ✓  summary ✓
+                                  └── Production now runs the patched base image
 ```
 
 Without Renovate, you would only discover the patched base image when a CVE scanner flags your production image — after the fact. With Renovate, you get the patch before deployment.
