@@ -18,6 +18,7 @@ stages:
   - build
   - promote-staging
   - promote-prod
+  
 
 variables:
   IMAGE_DEV:     $CI_REGISTRY_IMAGE/nexio-api-dev
