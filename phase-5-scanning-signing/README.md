@@ -1,6 +1,6 @@
 # Phase 5 — Container Security Scanning & Signing
 
-> **Concepts introduced:** SBOM, CVE scanning in CI, Cosign, Sigstore keyless signing, provenance attestation, `docker buildx --attest`
+> **Concepts introduced:** SBOM, CVE scanning in CI, Cosign key-based signing, Sigstore keyless signing (CI), provenance attestation, `docker buildx --attest`
 >
 > **CI/CD:** GitLab CI (`.gitlab-ci.yml`)
 
@@ -13,7 +13,8 @@
 | **SBOM** | Software Bill of Materials — a machine-readable inventory of every component in an image | Regulatory compliance (EO 14028), supply chain auditing, rapid CVE response |
 | **CVE scanning in CI** | Trivy runs as a CI step and fails the pipeline on critical findings | Shifts security left — vulnerabilities caught before they reach a registry |
 | **Cosign** | A tool for signing and verifying container images | Cryptographic proof that an image came from your pipeline and hasn't been tampered with |
-| **Sigstore / keyless signing** | Cosign uses a short-lived certificate bound to a CI identity (OIDC token) instead of a long-lived private key | No key management, no key rotation, no key leakage |
+| **Key-based signing** | Cosign signs with a private key you generate and control — no outbound calls to Sigstore services | Right for private infrastructure; requires secure key storage and rotation |
+| **Sigstore / keyless signing** | Cosign uses a short-lived certificate bound to a CI OIDC identity instead of a long-lived private key | No key management, no key leakage — used in the GitLab CI pipeline (Challenge 6) |
 | **Provenance attestation** | Metadata describing how an image was built (repo, commit, builder, workflow) | Answers: was this image built by our CI? From which commit? By which workflow? |
 | **`--attest`** | `docker buildx build --attest type=sbom` / `--attest type=provenance` | Generates and attaches SBOM and provenance as OCI attestation manifests alongside the image |
 
@@ -173,7 +174,7 @@ echo "Exit code: $?"
 
 ### Step 3: Understand the SARIF output format
 
-SARIF is the standard format for uploading security results to GitHub's Security tab:
+SARIF is a standard format for security tool output. GitLab's native format is `--format gitlab`, but SARIF is useful if you ever need to integrate with other tools:
 
 ```bash
 trivy image --severity CRITICAL,HIGH \
@@ -263,7 +264,7 @@ echo $DIGEST
 
 > **Why sign by digest, not tag?** Tags are mutable — `nexio-api:0.4` can be overwritten at any time. A digest (`sha256:abc123`) is immutable and uniquely identifies the exact bytes. Signing by digest creates an unforgeable link between the signature and those specific bytes.
 
-### Step 3: Generate a local key pair
+### Step 4: Generate a local key pair
 
 For private infrastructure you sign with your own key pair instead of delegating to
 Fulcio (Sigstore's public CA) or recording anything in Rekor (Sigstore's public
@@ -288,7 +289,7 @@ in real environments. For the lab, pressing Enter twice (empty passphrase) is fi
 > CI/CD variables marked *Protected + Masked*, HashiCorp Vault, AWS Secrets Manager).
 > Never commit it to the repository.
 
-### Step 4: Sign with the private key
+### Step 5: Sign with the private key
 
 ```bash
 cosign sign \
@@ -313,7 +314,7 @@ Expected output:
 Pushing signature to: registry.gitlab.com/YOUR_NAMESPACE/containerization-lab/nexio-api
 ```
 
-### Step 5: Verify the signature
+### Step 6: Verify the signature
 
 ```bash
 cosign verify \
@@ -372,8 +373,6 @@ outbound access to Sigstore's infrastructure.
 
 ### How Sigstore keyless signing works
 
-### How Sigstore keyless signing works
-
 ```
 1. Cosign generates a short-lived ephemeral key pair (valid for ~10 minutes)
 2. Cosign requests a certificate from Fulcio, proving:
@@ -390,12 +389,13 @@ Verification does not require knowing the signer's key in advance. It requires k
 
 ```bash
 cosign verify \
-  --certificate-identity-regexp "https://github.com/org/repo/.*" \
-  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  --certificate-identity-regexp \
+    "^project_path:YOUR_NAMESPACE/containerization-lab:.*" \
+  --certificate-oidc-issuer "https://gitlab.com" \
   $DIGEST
 ```
 
-This means: *"accept this image only if it was signed by a GitHub Actions workflow running in this repository."*
+This means: *"accept this image only if it was signed by a GitLab CI job running in this project."*
 
 ### Step 1: Look up a signature in Rekor
 
@@ -425,7 +425,7 @@ docker buildx build \
   --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
   --attest type=sbom \
   --attest type=provenance,mode=max \
-  -t ghcr.io/YOUR_USERNAME/nexio-api:0.4 \
+  -t registry.gitlab.com/YOUR_NAMESPACE/containerization-lab/nexio-api:0.4 \
   --push \
   phase-5-scanning-signing/app/
 ```
@@ -438,7 +438,8 @@ docker buildx build \
 ### Step 2: Inspect the attestations
 
 ```bash
-cosign download attestation ghcr.io/YOUR_USERNAME/nexio-api:0.4 | \
+IMAGE=registry.gitlab.com/YOUR_NAMESPACE/containerization-lab/nexio-api
+cosign download attestation $IMAGE:0.4 | \
   jq -r '.payload' | base64 -d | jq '.predicate'
 ```
 
@@ -450,11 +451,13 @@ The provenance predicate contains:
 ### Step 3: Verify the SBOM attestation
 
 ```bash
+IMAGE=registry.gitlab.com/YOUR_NAMESPACE/containerization-lab/nexio-api
 cosign verify-attestation \
   --type cyclonedx \
-  --certificate-identity-regexp "https://github.com/YOUR_ORG/.*" \
-  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  ghcr.io/YOUR_USERNAME/nexio-api:0.4
+  --certificate-identity-regexp \
+    "^project_path:YOUR_NAMESPACE/containerization-lab:.*" \
+  --certificate-oidc-issuer "https://gitlab.com" \
+  $IMAGE:0.4
 ```
 
 ---
@@ -646,11 +649,11 @@ A Trivy scan that only reports findings but never blocks a build provides a fals
 ### 2. Sign by digest, never by tag
 Tags are mutable. `nexio-api:latest` today may point to a different image tomorrow. A signature on a tag is meaningless if the tag can be reassigned. Always sign and verify by digest: `image@sha256:abc123`.
 
-### 3. The Rekor transparency log is public
-Any signature created with keyless Cosign is recorded in Rekor's public log. Do not sign internal images (containing proprietary code names, internal hostnames, or other sensitive information) with the public Rekor instance. For private deployments, run your own Sigstore stack (Fulcio + Rekor) or use Cosign with a private key.
+### 3. Key-based signing keeps signatures off the public Rekor log
+The local signing workflow in Challenge 3 uses `--tlog-upload=false` — signatures are stored in your private GitLab registry only. Keyless signing in CI (Challenge 6) records every signing event in Rekor's public transparency log permanently. Do not use keyless signing for internal images that contain proprietary code names, internal hostnames, or other sensitive information. Use key-based signing or a self-hosted Sigstore stack (Fulcio + Rekor) for those.
 
 ### 4. Enforce signature verification at the cluster level
-A signed image provides no protection if nothing enforces the signature at deployment time. In Kubernetes, use an admission controller — Kyverno or OPA Gatekeeper — with a policy that rejects pods whose images cannot be verified against your Cosign certificate identity. Signing without enforcement is documentation, not security.
+A signed image provides no protection if nothing enforces the signature at deployment time. In Kubernetes, use an admission controller — Kyverno or OPA Gatekeeper — with a policy that rejects pods whose images cannot be verified. For key-based signing, the policy references `cosign.pub`. For keyless CI signing, the policy references the expected certificate identity (`project_path:YOUR_NAMESPACE/containerization-lab`) and OIDC issuer (`https://gitlab.com`). Signing without enforcement is documentation, not security.
 
 ### 5. SBOMs require a storage and query strategy
 An SBOM attached to an image is useful when a CVE is published and you need to know which images are affected. But querying "which of our 10,000 images contains `libssl < 3.0.15`" requires indexing SBOMs — tools like Grype, Dependency-Track, or a registry with built-in SBOM indexing (e.g. AWS ECR, Artifact Registry). Plan the query strategy before you have the emergency.
@@ -659,7 +662,7 @@ An SBOM attached to an image is useful when a CVE is published and you need to k
 
 ## Outcome
 
-Every image pushed to the registry is: scanned for CVEs before signing, signed with an OIDC-bound certificate tied to the exact GitLab CI job identity that built it, and accompanied by a CycloneDX SBOM and a provenance attestation. The signing event is recorded in a public tamper-evident transparency log. Any image in the registry can be verified in 30 seconds by anyone with the registry address and the expected signing identity.
+Every image pushed to the GitLab Container Registry is: scanned for CVEs before signing, signed with a private key (locally) or a short-lived OIDC-bound certificate tied to the exact GitLab CI job identity (in CI), and accompanied by a CycloneDX SBOM and a provenance attestation. Local signing keeps all signature data in the private registry. CI signing records the event in a tamper-evident transparency log. Any image in the registry can be verified in under 30 seconds with `cosign verify` using either the public key or the expected GitLab CI certificate identity.
 
 ---
 
