@@ -83,6 +83,7 @@ Cleanup policy (GitLab built-in)
 
 ```
 phase-6-registry/
+├── .gitlab-ci.yml    ← promotion pipeline: build → staging → prod (manual gate)
 └── app/
     ├── Dockerfile        ← same as Phase 5
     ├── .dockerignore
@@ -467,83 +468,58 @@ The GitLab cleanup policy handles these automatically once configured.
 
 ## Challenge 7 — Promotion pipeline in GitLab CI
 
-The manual `crane copy` steps in Challenge 3 can be automated as a GitLab CI pipeline with environment-gated promotion.
+The manual `crane copy` steps in Challenge 3 can be automated as a GitLab CI pipeline with environment-gated promotion. The pipeline is in `phase-6-registry/.gitlab-ci.yml`.
 
-Add this job to your `.gitlab-ci.yml`:
+### Step 1: Copy the pipeline file to the repository root
 
-```yaml
-variables:
-  REGISTRY: registry.gitlab.com/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME
-  IMAGE_DEV: $REGISTRY/nexio-api-dev
-  IMAGE_STAGING: $REGISTRY/nexio-api-staging
-  IMAGE_PROD: $REGISTRY/nexio-api
-
-stages:
-  - build
-  - promote-staging
-  - promote-prod
-
-build:
-  stage: build
-  image: docker:26
-  services:
-    - docker:26-dind
-  before_script:
-    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
-  script:
-    - |
-      docker buildx build \
-        --platform linux/amd64 \
-        --build-arg APP_VERSION=$CI_COMMIT_SHORT_SHA \
-        --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
-        -t $IMAGE_DEV:sha-$CI_COMMIT_SHORT_SHA \
-        --push \
-        phase-6-registry/app/
-  rules:
-    - if: $CI_COMMIT_BRANCH == "main"
-
-promote-to-staging:
-  stage: promote-staging
-  image: gcr.io/go-containerregistry/crane:latest
-  before_script:
-    - crane auth login $CI_REGISTRY -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD
-  script:
-    - |
-      crane copy \
-        $IMAGE_DEV:sha-$CI_COMMIT_SHORT_SHA \
-        $IMAGE_STAGING:sha-$CI_COMMIT_SHORT_SHA
-  environment:
-    name: staging
-  needs: [build]
-  rules:
-    - if: $CI_COMMIT_BRANCH == "main"
-
-promote-to-prod:
-  stage: promote-prod
-  image: gcr.io/go-containerregistry/crane:latest
-  before_script:
-    - crane auth login $CI_REGISTRY -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD
-  script:
-    - |
-      crane copy \
-        $IMAGE_STAGING:sha-$CI_COMMIT_SHORT_SHA \
-        $IMAGE_PROD:sha-$CI_COMMIT_SHORT_SHA
-      # Also update the semver tag if this is a release
-      if [ -n "$CI_COMMIT_TAG" ]; then
-        crane tag $IMAGE_PROD:sha-$CI_COMMIT_SHORT_SHA $CI_COMMIT_TAG
-      fi
-  environment:
-    name: production
-  needs: [promote-to-staging]
-  when: manual          # requires explicit approval to promote to prod
-  rules:
-    - if: $CI_COMMIT_BRANCH == "main"
+```bash
+cp phase-6-registry/.gitlab-ci.yml .gitlab-ci.yml
 ```
 
-Key points:
+### Step 2: Push to trigger the pipeline
+
+```bash
+git add .gitlab-ci.yml
+git commit -m "ci: add registry promotion pipeline"
+git push origin main
+```
+
+Navigate to **GitLab → your project → CI/CD → Pipelines**. You will see three stages: `build`, `promote-staging`, `promote-prod`.
+
+### Step 3: Follow the pipeline
+
+**`build` job:**
+- Builds the image for `linux/amd64` with BuildKit and pushes to `nexio-api-dev:sha-<sha>`
+- Passes `SHORT_SHA` to downstream jobs via a dotenv artifact
+- Also tags `nexio-api-dev:latest` on pushes to `main`
+
+**`promote-to-staging` job:**
+- Runs automatically after `build`
+- Calls `crane copy nexio-api-dev:sha-<sha> nexio-api-staging:sha-<sha>` — server-to-server, no bytes downloaded to the runner
+- Verifies the digest is identical after copy (fails the job if not)
+
+**`promote-to-prod` job:**
+- Blocked with a **▶ Play** button — requires a manual click
+- Copies from `nexio-api-staging` to `nexio-api`
+- On a semver git tag (`v*.*.*`), also applies the version tag to the prod image
+
+### Step 4: Promote to production manually
+
+In the pipeline view, click the **▶** button on the `promote-to-prod` job. Confirm the digest match in the job log:
+
+```
+staging digest: sha256:abc123...
+prod digest:    sha256:abc123...
+Digests match — promotion verified.
+```
+
+The same bytes that were tested in staging are now in production. No rebuild.
+
+### Key points
+
 - `CI_REGISTRY`, `CI_REGISTRY_USER`, `CI_REGISTRY_PASSWORD` are injected automatically by GitLab — no secrets to configure
-- `promote-to-prod` is `when: manual` — someone must click **Play** in the pipeline UI before the image reaches production
-- `crane copy` between paths in the same registry is near-instant (manifest copy, no layer transfer)
+- `when: manual` on the prod job means nobody accidentally deploys to production by pushing a commit
+- `crane copy` between paths in the same GitLab registry is near-instant — manifest references are rewritten server-side, no layer transfer occurs
 
 ### Protect semver tags in GitLab
 

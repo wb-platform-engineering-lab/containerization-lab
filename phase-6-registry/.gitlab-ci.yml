@@ -1,0 +1,148 @@
+# Phase 6 — Registry & Image Lifecycle Management
+# GitLab CI pipeline demonstrating:
+#   - Immutable SHA tagging on every push
+#   - server-to-server image promotion (dev → staging → prod) with crane
+#   - Manual gate before production
+#   - Semver tagging on git release tags
+#
+# To run this pipeline, copy this file to the root of your repository:
+#   cp phase-6-registry/.gitlab-ci.yml .gitlab-ci.yml
+#
+# Registry layout (all within the same GitLab project registry):
+#   $CI_REGISTRY_IMAGE/nexio-api-dev:sha-<sha>      ← every build
+#   $CI_REGISTRY_IMAGE/nexio-api-staging:sha-<sha>  ← promoted after CI passes
+#   $CI_REGISTRY_IMAGE/nexio-api:sha-<sha>          ← promoted manually to prod
+#   $CI_REGISTRY_IMAGE/nexio-api:v1.2.3             ← semver tag on git release
+
+stages:
+  - build
+  - promote-staging
+  - promote-prod
+
+variables:
+  IMAGE_DEV:     $CI_REGISTRY_IMAGE/nexio-api-dev
+  IMAGE_STAGING: $CI_REGISTRY_IMAGE/nexio-api-staging
+  IMAGE_PROD:    $CI_REGISTRY_IMAGE/nexio-api
+  # Docker-in-Docker TLS
+  DOCKER_HOST:        tcp://docker:2376
+  DOCKER_TLS_CERTDIR: "/certs"
+
+# ── Build ──────────────────────────────────────────────────────────────────────
+# Builds the image and pushes it to the dev registry path with an immutable
+# SHA tag. Also tags :latest on the dev path for developer convenience.
+build:
+  stage: build
+  image: docker:27
+  services:
+    - name: docker:27-dind
+      alias: docker
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - apk add --no-cache jq
+    - docker buildx create --use --name ci-builder --driver docker-container
+  script:
+    - SHORT_SHA=$(echo $CI_COMMIT_SHA | cut -c1-7)
+    - TAG_SHA=$IMAGE_DEV:sha-$SHORT_SHA
+    - BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    - |
+      EXTRA_TAGS=""
+      [ "$CI_COMMIT_BRANCH" = "main" ] && EXTRA_TAGS="-t $IMAGE_DEV:latest"
+    - |
+      docker buildx build \
+        --platform linux/amd64 \
+        --build-arg APP_VERSION=$CI_COMMIT_SHORT_SHA \
+        --build-arg BUILD_DATE=$BUILD_DATE \
+        --cache-from type=registry,ref=$IMAGE_DEV:cache \
+        --cache-to   type=registry,ref=$IMAGE_DEV:cache,mode=max \
+        --metadata-file /tmp/build-metadata.json \
+        --push \
+        -t $TAG_SHA $EXTRA_TAGS \
+        phase-6-registry/app/
+    - |
+      # Pass the SHA tag to downstream promotion jobs via dotenv artifact
+      echo "SHORT_SHA=$SHORT_SHA"     > build.env
+      echo "TAG_SHA=$TAG_SHA"        >> build.env
+  artifacts:
+    reports:
+      dotenv: build.env
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ── Promote to staging ─────────────────────────────────────────────────────────
+# Copies the exact image digest from the dev path to the staging path.
+# crane copy is server-to-server — no image bytes are downloaded to the runner.
+promote-to-staging:
+  stage: promote-staging
+  image: alpine:3.20
+  before_script:
+    - apk add --no-cache curl
+    - |
+      curl -sL \
+        https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_x86_64.tar.gz \
+        | tar -xz -C /usr/local/bin crane
+    - crane auth login $CI_REGISTRY -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD
+  script:
+    - |
+      echo "Promoting $IMAGE_DEV:sha-$SHORT_SHA → $IMAGE_STAGING:sha-$SHORT_SHA"
+      crane copy \
+        $IMAGE_DEV:sha-$SHORT_SHA \
+        $IMAGE_STAGING:sha-$SHORT_SHA
+    - |
+      # Confirm digest is identical after copy
+      D1=$(crane digest $IMAGE_DEV:sha-$SHORT_SHA)
+      D2=$(crane digest $IMAGE_STAGING:sha-$SHORT_SHA)
+      echo "dev digest:     $D1"
+      echo "staging digest: $D2"
+      [ "$D1" = "$D2" ] && echo "Digests match — promotion verified." \
+                        || { echo "DIGEST MISMATCH"; exit 1; }
+  environment:
+    name: staging
+  needs:
+    - job: build
+      artifacts: true
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# ── Promote to production ──────────────────────────────────────────────────────
+# Copies the staging image to the production path.
+# Requires a manual click in the GitLab pipeline UI — no automatic promotion to prod.
+# On git release tags (v*.*.*), also tags the prod image with the semver version.
+promote-to-prod:
+  stage: promote-prod
+  image: alpine:3.20
+  before_script:
+    - apk add --no-cache curl
+    - |
+      curl -sL \
+        https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_x86_64.tar.gz \
+        | tar -xz -C /usr/local/bin crane
+    - crane auth login $CI_REGISTRY -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD
+  script:
+    - |
+      echo "Promoting $IMAGE_STAGING:sha-$SHORT_SHA → $IMAGE_PROD:sha-$SHORT_SHA"
+      crane copy \
+        $IMAGE_STAGING:sha-$SHORT_SHA \
+        $IMAGE_PROD:sha-$SHORT_SHA
+    - |
+      # On a semver git tag, also tag the prod image with the version
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        echo "Release tag detected: $CI_COMMIT_TAG — tagging prod image"
+        crane tag $IMAGE_PROD:sha-$SHORT_SHA $CI_COMMIT_TAG
+      fi
+    - |
+      # Confirm digest is identical after copy
+      D1=$(crane digest $IMAGE_STAGING:sha-$SHORT_SHA)
+      D2=$(crane digest $IMAGE_PROD:sha-$SHORT_SHA)
+      echo "staging digest: $D1"
+      echo "prod digest:    $D2"
+      [ "$D1" = "$D2" ] && echo "Digests match — promotion verified." \
+                        || { echo "DIGEST MISMATCH"; exit 1; }
+  environment:
+    name: production
+  needs:
+    - job: promote-to-staging
+      artifacts: true
+  when: manual        # requires an explicit click in the GitLab pipeline UI
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
