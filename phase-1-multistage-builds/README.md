@@ -1,6 +1,6 @@
 # Phase 1 — Multi-Stage Builds & Image Optimization
 
-> **Concepts introduced:** Multi-stage build, slim base image, `.dockerignore`, build cache invalidation, `docker history`, `dive`
+> **Concepts introduced:** Multi-stage build, slim base image, `.dockerignore`, build cache invalidation, `docker history`, `dive`, digest pinning, Renovate
 
 ---
 
@@ -14,6 +14,8 @@
 | **Build cache invalidation** | Docker rebuilds from the first layer whose inputs changed | Layer order is a performance decision — slow layers must come before fast ones |
 | **`docker history`** | Shows each layer of an image, its size, and the command that created it | Reveals exactly where the bytes come from |
 | **`dive`** | Interactive TUI for exploring image layers and wasted space | Faster than `docker history` for diagnosing bloat |
+| **Digest pinning** | Referencing a base image by `@sha256:...` instead of a mutable tag | Reproducible builds — the same bytes are pulled every time regardless of upstream changes |
+| **Renovate** | A bot that opens MRs when pinned digests have a newer version available | Keeps base images current without manual tracking — patches land before CVE scanners flag production |
 
 ---
 
@@ -431,6 +433,169 @@ docker rmi nexio-api:slim-only nexio-api:phase0
 
 ---
 
+## Challenge 7 — Automate digest bumps with Renovate
+
+Production consideration #1 says to pin base images by digest. This challenge makes you do it, then sets up Renovate to keep those digests current automatically.
+
+> **Why not Dependabot?** Dependabot is GitHub-only. Renovate works on GitLab natively and has first-class support for Dockerfile digest pinning.
+
+### Step 1: Pin the base image to a digest
+
+First, find the current digest for `python:3.12-slim`:
+
+```bash
+crane digest python:3.12-slim
+# sha256:abcdef1234...
+```
+
+Update `phase-1-multistage-builds/app/Dockerfile` to pin both stages:
+
+```dockerfile
+# Stage 1 — builder
+FROM python:3.12-slim@sha256:<digest-from-above> AS builder
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# Stage 2 — runtime
+FROM python:3.12-slim@sha256:<digest-from-above>
+WORKDIR /app
+COPY --from=builder /install /usr/local
+COPY app.py .
+EXPOSE 5000
+CMD ["python", "app.py"]
+```
+
+Both stages use the same digest — one `crane digest` call, two substitutions. Verify the build still works:
+
+```bash
+docker build -t nexio-api:0.1-pinned phase-1-multistage-builds/app/
+```
+
+> **What pinning gives you:** `python:3.12-slim` is a mutable tag — Docker Hub can push a new image under it at any time. `python:3.12-slim@sha256:abc123` is immutable. Your build is now reproducible: the same bytes are pulled every time, forever, regardless of what happens upstream.
+
+> **What pinning costs you:** You are now responsible for keeping the digest current. Without automation, a pinned digest becomes a stale one — and a stale base image accumulates CVEs. That is exactly what Renovate solves.
+
+### Step 2: Add a `renovate.json` configuration file
+
+Create `renovate.json` at the root of the repository:
+
+```json
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:base"],
+  "pinDigests": true,
+  "dockerfile": {
+    "enabled": true
+  },
+  "packageRules": [
+    {
+      "matchManagers": ["dockerfile"],
+      "automerge": false,
+      "commitMessagePrefix": "fix(deps):",
+      "labels": ["dependencies", "docker"]
+    }
+  ],
+  "schedule": ["before 6am on Monday"]
+}
+```
+
+Key settings:
+
+| Setting | Effect |
+|---------|--------|
+| `pinDigests: true` | Renovate will automatically add `@sha256:...` to any `FROM` line that doesn't have one |
+| `automerge: false` | Every digest bump opens a merge request — you review and merge it |
+| `schedule` | Renovate checks for new digests once a week (Monday before 6am) |
+| `labels` | MRs are labelled `dependencies` and `docker` for easy filtering |
+
+Commit and push:
+
+```bash
+git add renovate.json
+git commit -m "chore: add Renovate config for Dockerfile digest pinning"
+git push origin main && git push gitlab main
+```
+
+### Step 3: Run Renovate as a scheduled GitLab CI job
+
+Renovate on GitLab runs as a CI job. Add this job to your `.gitlab-ci.yml`:
+
+```yaml
+renovate:
+  stage: .pre
+  image: renovate/renovate:latest
+  variables:
+    RENOVATE_PLATFORM: gitlab
+    RENOVATE_ENDPOINT: https://gitlab.com/api/v4
+    RENOVATE_TOKEN: $RENOVATE_TOKEN   # GitLab PAT — set in CI/CD variables
+    LOG_LEVEL: debug
+  script:
+    - renovate $CI_PROJECT_PATH
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+```
+
+**Create the GitLab PAT for Renovate:**
+
+1. Go to **GitLab → your avatar → Edit profile → Access tokens**
+2. Create a token named `renovate-bot` with scopes: `api`, `read_repository`, `write_repository`
+3. Go to your project → **Settings → CI/CD → Variables**
+4. Add variable `RENOVATE_TOKEN` = the token, marked **Protected** and **Masked**
+
+**Create the scheduled pipeline:**
+
+1. Go to **CI/CD → Schedules → New schedule**
+2. Description: `Renovate — weekly digest check`
+3. Interval: `0 5 * * 1` (Monday at 05:00 UTC)
+4. Save
+
+### Step 4: Understand what Renovate does on first run
+
+Trigger the scheduled pipeline manually to see Renovate in action:
+
+1. Go to **CI/CD → Schedules** → click **▶ Run**
+2. Watch the job log — Renovate scans every `FROM` line in every Dockerfile in the repo
+3. For any `FROM image:tag` without a digest, it looks up the current digest and opens a merge request
+
+The first run typically opens one MR per Dockerfile that needs pinning. Each MR looks like:
+
+```
+fix(deps): pin python:3.12-slim digest to sha256:newdigest123
+
+Updates python:3.12-slim digest from sha256:olddigest to sha256:newdigest123
+
+| datasource | package           | from                   | to                     |
+|------------|-------------------|------------------------|------------------------|
+| docker     | python            | 3.12-slim@sha256:old   | 3.12-slim@sha256:new   |
+```
+
+The MR contains only the digest change — nothing else. Review it, check the Trivy scan results (if your pipeline runs on MRs), and merge.
+
+### Step 5: What a subsequent weekly run looks like
+
+After the initial pinning, Renovate's weekly job:
+
+1. Checks whether the digest `python:3.12-slim` resolves to has changed since last week
+2. If Docker Hub published a new `3.12-slim` image (e.g. a Python patch release or a Debian security update), Renovate opens a new MR with the updated digest
+3. Your pipeline runs against the new base image — Trivy scans it, the build succeeds or fails
+4. You merge the MR; the new digest lands in `main`
+
+**The workflow in practice:**
+
+```
+Monday 05:00  Renovate runs
+              └── python:3.12-slim has a new digest (CVE patched upstream)
+                  └── MR opened: "fix(deps): pin python:3.12-slim digest"
+                      └── Pipeline: build ✓  scan ✓  sign ✓
+                          └── You review + merge
+                              └── Production now runs the patched base image
+```
+
+Without Renovate, you would only discover the patched base image when a CVE scanner flags your production image — after the fact. With Renovate, you get the patch before deployment.
+
+---
+
 ## Command reference
 
 | Command | What it does |
@@ -455,7 +620,7 @@ FROM python:3.12-slim@sha256:abc123... AS builder
 FROM python:3.12-slim@sha256:abc123...
 ```
 
-Automate digest bumps with Dependabot or Renovate — they open a PR when a new digest is available, giving you a review gate.
+Automate digest bumps with Renovate — it opens a merge request when a new digest is available, giving you a review gate before the new base image reaches production. See Challenge 7 for the full setup.
 
 ### 2. Lock transitive dependencies with a lock file
 `requirements.txt` pins Flask to `3.1.0` but not Flask's own dependencies. On the next build, a newer version of Werkzeug (Flask's dependency) might install. Use `pip-compile` from `pip-tools` to generate a fully resolved `requirements.lock`:
