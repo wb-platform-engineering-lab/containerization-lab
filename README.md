@@ -6,6 +6,8 @@ Built around **Nexio** — a fictional real-time event processing SaaS — where
 
 > **New here?** Read [PRINCIPLES.md](./PRINCIPLES.md) first — DevSecOps principles, what to decide before Phase 0, and the architecture decisions that constrain every phase. Then read [STORY.md](./STORY.md) for the narrative behind Nexio.
 
+> **Done?** Test your knowledge with the [full-lab quiz](./quiz.html) — 27 questions across all 10 phases.
+
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
 ---
