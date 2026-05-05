@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Containerization Lab — Full Quiz</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8fafc; color: #0f172a; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; }
+    .progress-bar-wrap { position: fixed; top: 0; left: 0; right: 0; height: 4px; background: #e2e8f0; z-index: 100; }
+    .progress-bar { height: 100%; background: linear-gradient(90deg, #6366f1, #818cf8); transition: width 0.4s ease; }
+    .header { position: fixed; top: 12px; right: 20px; font-size: 13px; color: #94a3b8; z-index: 100; }
+    .card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 48px; max-width: 680px; width: 100%; box-shadow: 0 4px 24px rgba(0,0,0,0.06); animation: fadeUp 0.35s ease; }
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+    .phase-label { font-size: 12px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #6366f1; margin-bottom: 12px; }
+    .question { font-size: 20px; font-weight: 600; line-height: 1.5; color: #0f172a; margin-bottom: 32px; }
+    .question code { background: #f1f5f9; color: #4f46e5; padding: 2px 7px; border-radius: 5px; font-size: 15px; font-family: 'SF Mono', 'Fira Code', monospace; }
+    .options { display: flex; flex-direction: column; gap: 12px; }
+    .option { display: flex; align-items: flex-start; gap: 14px; padding: 16px 18px; background: #f8fafc; border: 1.5px solid #e2e8f0; border-radius: 10px; cursor: pointer; transition: border-color 0.15s, background 0.15s, transform 0.1s; user-select: none; }
+    .option:hover:not(.disabled) { border-color: #6366f1; background: #eef2ff; transform: translateX(3px); }
+    .option-key { width: 28px; height: 28px; min-width: 28px; border: 1.5px solid #cbd5e1; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #64748b; transition: all 0.15s; }
+    .option-text { font-size: 15px; line-height: 1.5; color: #334155; padding-top: 3px; }
+    .option-text code { background: #f1f5f9; color: #4f46e5; padding: 1px 6px; border-radius: 4px; font-size: 13px; font-family: 'SF Mono', 'Fira Code', monospace; }
+    .option.correct { border-color: #22c55e; background: #f0fdf4; }
+    .option.correct .option-key { background: #22c55e; border-color: #22c55e; color: #fff; }
+    .option.correct .option-text { color: #166534; }
+    .option.wrong { border-color: #ef4444; background: #fef2f2; }
+    .option.wrong .option-key { background: #ef4444; border-color: #ef4444; color: #fff; }
+    .option.wrong .option-text { color: #991b1b; }
+    .option.dimmed { opacity: 0.35; }
+    .option.disabled { cursor: default; }
+    .explanation { margin-top: 20px; padding: 16px 18px; background: #f8fafc; border-left: 3px solid #6366f1; border-radius: 0 8px 8px 0; font-size: 14px; line-height: 1.65; color: #475569; animation: fadeUp 0.25s ease; }
+    .explanation code { background: #f1f5f9; color: #4f46e5; padding: 1px 6px; border-radius: 4px; font-size: 13px; font-family: 'SF Mono', 'Fira Code', monospace; }
+    .btn-next { margin-top: 28px; padding: 14px 32px; background: #6366f1; color: #fff; font-size: 15px; font-weight: 600; border: none; border-radius: 10px; cursor: pointer; transition: background 0.15s, transform 0.1s; width: 100%; }
+    .btn-next:hover { background: #4f46e5; transform: translateY(-1px); }
+    .score-screen { text-align: center; }
+    .score-circle { width: 120px; height: 120px; border-radius: 50%; background: linear-gradient(135deg, #6366f1, #818cf8); display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 0 auto 28px; }
+    .score-number { font-size: 36px; font-weight: 800; color: #fff; line-height: 1; }
+    .score-total { font-size: 14px; color: rgba(255,255,255,0.7); margin-top: 2px; }
+    .score-title { font-size: 24px; font-weight: 700; color: #0f172a; margin-bottom: 10px; }
+    .score-subtitle { font-size: 15px; color: #64748b; margin-bottom: 32px; line-height: 1.6; }
+    .score-breakdown { display: flex; gap: 12px; justify-content: center; margin-bottom: 32px; flex-wrap: wrap; }
+    .score-tag { padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; }
+    .score-tag.correct { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; }
+    .score-tag.wrong   { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+    .btn-restart { padding: 14px 40px; background: transparent; color: #6366f1; font-size: 15px; font-weight: 600; border: 1.5px solid #6366f1; border-radius: 10px; cursor: pointer; transition: background 0.15s; margin-right: 12px; }
+    .btn-restart:hover { background: #eef2ff; }
+    .btn-back { padding: 14px 40px; background: #6366f1; color: #fff; font-size: 15px; font-weight: 600; border: none; border-radius: 10px; cursor: pointer; transition: background 0.15s; text-decoration: none; display: inline-block; }
+    .btn-back:hover { background: #4f46e5; }
+  </style>
+</head>
+<body>
+<div class="progress-bar-wrap"><div class="progress-bar" id="progressBar" style="width: 0%"></div></div>
+<div class="header" id="questionCounter"></div>
+<div class="card" id="quizCard"></div>
+<script>
+const questions = [
+
+  // ── Phase 0 — Your First Container ───────────────────────────────────────
+  {
+    phase: "Phase 0 · Your First Container",
+    q: "You change <code>app.py</code> and rebuild. Docker replaces every layer from scratch — the <code>pip install</code> step takes 40 seconds again. What is the cause?",
+    options: [
+      "Docker detected a security vulnerability in the previous pip layer and invalidated it",
+      "<code>COPY . .</code> appears before <code>RUN pip install</code>, so any file change busts the pip cache",
+      "The <code>--no-cache</code> flag was set as a Docker daemon default",
+      "pip install always runs without a cache — it cannot be cached across builds"
+    ],
+    correct: 1,
+    explanation: "Docker invalidates a layer — and every layer after it — when its inputs change. Placing <code>COPY . .</code> before <code>RUN pip install</code> means that touching any source file busts the pip cache. The fix is to copy only <code>requirements.txt</code> first, run pip, then copy the rest of the app."
+  },
+  {
+    phase: "Phase 0 · Your First Container",
+    q: "A Dockerfile contains <code>EXPOSE 5000</code>. You run <code>docker run nexio-api:0.1</code> without any flags. Can you reach the app on <code>localhost:5000</code>?",
+    options: [
+      "Yes — EXPOSE automatically binds the container port to the same port on the host",
+      "No — EXPOSE is documentation only; you must publish the port with <code>-p 5000:5000</code> to bind it to the host",
+      "Yes — but only if the host firewall allows port 5000",
+      "No — EXPOSE is deprecated; use the <code>ports:</code> key in docker-compose.yml instead"
+    ],
+    correct: 1,
+    explanation: "<code>EXPOSE</code> tells Docker (and humans reading the Dockerfile) which port the container listens on. It does not publish the port to the host. To reach the app from <code>localhost</code>, you must use <code>-p &lt;host-port&gt;:&lt;container-port&gt;</code> when running the container."
+  },
+
+  // ── Phase 1 — Multi-Stage Builds ─────────────────────────────────────────
+  {
+    phase: "Phase 1 · Multi-Stage Builds",
+    q: "You add a second <code>FROM</code> stage to your Dockerfile. What is the key benefit of using <code>COPY --from=builder</code> instead of a single stage?",
+    options: [
+      "The build runs twice as fast because Docker uses parallel execution",
+      "Only the artifacts you explicitly copy land in the final image — build tools, compilers, and caches stay in the builder stage and are discarded",
+      "The <code>--from</code> flag enables cross-platform compilation automatically",
+      "Docker caches the builder stage indefinitely so subsequent builds are instant"
+    ],
+    correct: 1,
+    explanation: "Multi-stage builds let you use a full build environment (compilers, pip, cargo) in a temporary stage, then copy only the compiled output into a slim runtime image. The builder stage — and everything in it — is thrown away. The result is a smaller, safer image with no build toolchain exposed."
+  },
+  {
+    phase: "Phase 1 · Multi-Stage Builds",
+    q: "Your <code>.dockerignore</code> excludes the <code>.git/</code> directory. A stage later in the Dockerfile tries to <code>COPY .git/ /app/.git/</code>. What happens?",
+    options: [
+      "The copy succeeds — <code>.dockerignore</code> only applies to the first stage",
+      "The build fails with a permission error because <code>.git/</code> is owned by root",
+      "The copy silently copies nothing — the excluded path is absent from the build context sent to the daemon",
+      "Docker prompts you to confirm whether to include the ignored path"
+    ],
+    correct: 2,
+    explanation: "<code>.dockerignore</code> filters the build context before it is sent to the Docker daemon. The excluded paths never exist inside the daemon's context, so <code>COPY</code> has nothing to copy. This applies to all stages — there is no per-stage override. If you need <code>.git/</code> in a stage, you must remove it from <code>.dockerignore</code>."
+  },
+  {
+    phase: "Phase 1 · Multi-Stage Builds",
+    q: "You pin your base image: <code>FROM python:3.12-slim@sha256:abc123</code>. Three months later the Trivy scan fails — the base image has a critical CVE. What is the correct response?",
+    options: [
+      "Remove the digest pin and switch back to <code>python:3.12-slim</code> so Docker always pulls the latest",
+      "Ignore it — the CVE is in the base image, not your code, so it cannot affect your app",
+      "Let Renovate open a merge request with the updated digest; review the scan results and merge",
+      "Rebuild the image with <code>docker build --no-cache</code> — this forces Docker to pull a fresh base image"
+    ],
+    correct: 2,
+    explanation: "This is exactly the workflow Renovate automates. It detects that <code>python:3.12-slim</code> resolves to a new digest (containing the CVE patch), opens an MR updating the <code>@sha256:</code> pin, and your CI pipeline runs Trivy against the new base. You review, confirm the scan is clean, and merge. <code>--no-cache</code> would pull the same pinned digest — the SHA hasn't changed."
+  },
+
+  // ── Phase 2 — Docker Compose ──────────────────────────────────────────────
+  {
+    phase: "Phase 2 · Docker Compose",
+    q: "Your Compose file has <code>depends_on: postgres</code> but the backend container crashes on startup with a DB connection error. PostgreSQL is running. What is the cause?",
+    options: [
+      "The <code>depends_on</code> key is not supported in Compose v2",
+      "<code>depends_on</code> without a condition only waits for the container to start — not for PostgreSQL to be ready to accept connections",
+      "The backend image was built before the postgres image, causing a version mismatch",
+      "Docker resolves service names by IP address, not hostname — the connection string must use the container IP"
+    ],
+    correct: 1,
+    explanation: "<code>depends_on</code> by default waits only for the container process to start, not for the service inside it to be healthy. PostgreSQL takes a few seconds to initialise. The fix is <code>depends_on: postgres: condition: service_healthy</code> combined with a <code>healthcheck</code> on the postgres service that runs <code>pg_isready</code>."
+  },
+  {
+    phase: "Phase 2 · Docker Compose",
+    q: "A teammate runs <code>docker compose down -v</code> on the staging environment. What does the <code>-v</code> flag do that plain <code>docker compose down</code> does not?",
+    options: [
+      "Prints verbose output — equivalent to <code>--verbose</code>",
+      "Removes all containers, networks, <em>and named volumes</em> — permanently deleting the database data",
+      "Validates the Compose file syntax before stopping containers",
+      "Forces a volume remount so the next <code>up</code> pulls fresh data from the registry"
+    ],
+    correct: 1,
+    explanation: "<code>-v</code> removes named volumes declared in the Compose file. In a Compose setup where PostgreSQL data lives in a named volume (e.g. <code>postgres-data</code>), this deletes the database permanently. Plain <code>docker compose down</code> stops and removes containers and networks but leaves volumes intact. Never run <code>-v</code> against production data."
+  },
+
+  // ── Phase 3 — Production-Ready Images ────────────────────────────────────
+  {
+    phase: "Phase 3 · Production-Ready Images",
+    q: "Your Dockerfile ends with <code>USER nexio</code> and a <code>HEALTHCHECK CMD curl localhost:5000/health</code>. The health check always reports <code>unhealthy</code> even though the app responds fine. What is the most likely cause?",
+    options: [
+      "curl is not available in the final image",
+      "HEALTHCHECK runs as <code>root</code> regardless of the <code>USER</code> instruction",
+      "<code>curl</code> uses HTTPS by default, but the app only serves HTTP",
+      "HEALTHCHECK cannot be combined with a non-root USER in the same Dockerfile"
+    ],
+    correct: 0,
+    explanation: "Distroless or slim base images often omit <code>curl</code>. The healthcheck command fails immediately with <code>executable not found</code>, which Docker reports as <code>unhealthy</code>. The fix is either to <code>RUN apk add curl</code> in the build stage, use <code>wget -qO- localhost:5000/health</code> (often present), or write a tiny Python health-check script instead of relying on shell tools."
+  },
+  {
+    phase: "Phase 3 · Production-Ready Images",
+    q: "Trivy scans your image and reports 12 CRITICAL CVEs — all in the base OS packages with <strong>no fix available</strong>. Your pipeline is set to <code>--exit-code 1</code> on CRITICAL. What is the right response?",
+    options: [
+      "Disable Trivy scanning — unfixed CVEs are false positives",
+      "Switch to <code>--severity HIGH</code> to avoid seeing CRITICAL results",
+      "Add <code>--ignore-unfixed</code> to filter out CVEs with no available patch, while keeping the pipeline gate for CVEs that do have fixes",
+      "Pin the base image to an older digest where these CVEs were not yet disclosed"
+    ],
+    correct: 2,
+    explanation: "<code>--ignore-unfixed</code> tells Trivy to skip CVEs for which the package vendor has not yet released a patch. These are upstream issues you cannot resolve by updating a package — failing the pipeline on them only produces noise. The flag keeps the gate meaningful: it blocks on CVEs you <em>can</em> fix and ignores ones you cannot."
+  },
+
+  // ── Phase 4 — BuildKit ────────────────────────────────────────────────────
+  {
+    phase: "Phase 4 · BuildKit",
+    q: "You add <code>RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements.txt</code>. What is the difference between this cache and a regular Docker layer cache?",
+    options: [
+      "There is no difference — both are invalidated when requirements.txt changes",
+      "The BuildKit cache mount persists across builds on the same machine but is never written into the image layers — pip downloads are reused without adding bytes to the image",
+      "The BuildKit cache mount is stored in the registry, so it is shared across all CI runners automatically",
+      "BuildKit cache mounts are only available on Linux hosts — macOS falls back to layer caching silently"
+    ],
+    correct: 1,
+    explanation: "A <code>--mount=type=cache</code> is a persistent directory managed by BuildKit on the build host. pip downloads into it are reused on subsequent builds even when <code>requirements.txt</code> changes — but the cache directory is never committed to any image layer. This means faster incremental builds with no image size penalty. It is local to the builder; for CI, use <code>--cache-from/--cache-to type=registry</code> for distributed caching."
+  },
+  {
+    phase: "Phase 4 · BuildKit",
+    q: "Your Dockerfile has <code>ARG APP_VERSION</code> before the first <code>FROM</code>, and a second stage beginning with <code>FROM python:3.12-slim</code>. In the second stage, <code>$APP_VERSION</code> is empty. Why?",
+    options: [
+      "ARG variables are always empty in non-root stages — use ENV instead",
+      "ARG values defined before the first FROM go out of scope after the first stage. Each subsequent stage must re-declare <code>ARG APP_VERSION</code> to inherit the value passed via <code>--build-arg</code>",
+      "BuildKit does not support ARG in multi-stage builds",
+      "The variable name is case-sensitive — use <code>$app_version</code> in the second stage"
+    ],
+    correct: 1,
+    explanation: "In a multi-stage Dockerfile, <code>ARG</code> variables defined before the first <code>FROM</code> are accessible only during that preamble (e.g. to parameterise the base image tag). They do not automatically flow into subsequent stages. To use them, re-declare <code>ARG APP_VERSION</code> (without a value) inside each stage that needs it — Docker will then populate it from the <code>--build-arg</code> passed at build time."
+  },
+  {
+    phase: "Phase 4 · BuildKit",
+    q: "You run <code>docker buildx build --platform linux/amd64,linux/arm64 --load .</code>. The build fails. Why?",
+    options: [
+      "<code>--load</code> is not supported on Linux hosts",
+      "<code>--load</code> can only load a single-platform image into the local Docker daemon. Multi-platform builds must use <code>--push</code> to write the manifest list to a registry",
+      "BuildKit requires <code>--platform</code> to be set in the Dockerfile, not on the command line",
+      "The <code>linux/arm64</code> platform requires a separate Dockerfile"
+    ],
+    correct: 1,
+    explanation: "<code>--load</code> imports the built image into the local Docker daemon's image store, which only supports single-platform images. A multi-platform build produces a manifest list pointing to multiple architecture-specific digests — a structure the local daemon cannot store. Use <code>--push</code> to send it to a registry, which natively supports manifest lists."
+  },
+
+  // ── Phase 5 — Scanning & Signing ─────────────────────────────────────────
+  {
+    phase: "Phase 5 · Scanning & Signing",
+    q: "You sign an image with <code>cosign sign nexio-api:latest</code>. A week later a colleague pushes a new image under the same tag. Is your signature still valid for the new image?",
+    options: [
+      "Yes — Cosign signatures are attached to the tag, so they follow it automatically",
+      "Yes — Cosign re-validates the signature against the current image on every verify",
+      "No — the signature was created for the specific digest behind <code>:latest</code> at signing time. The new push changes the digest; the old signature no longer matches",
+      "No — Cosign signatures expire after 7 days by default"
+    ],
+    correct: 2,
+    explanation: "Cosign signs a specific digest, not a tag. When you run <code>cosign sign nexio-api:latest</code>, Cosign resolves the tag to its current digest and signs that. If someone pushes a new image under <code>:latest</code>, the tag now points to a different digest — your signature does not transfer. Always sign by digest (<code>image@sha256:...</code>) to be explicit about what you are signing."
+  },
+  {
+    phase: "Phase 5 · Scanning & Signing",
+    q: "You want to sign images on a private GitLab runner without contacting Fulcio or Rekor. Which Cosign command achieves this?",
+    options: [
+      "<code>cosign sign --keyless $IMAGE@$DIGEST</code>",
+      "<code>cosign sign --key cosign.key --tlog-upload=false $IMAGE@$DIGEST</code>",
+      "<code>cosign sign --no-fulcio --no-rekor $IMAGE@$DIGEST</code>",
+      "<code>cosign sign --offline $IMAGE@$DIGEST</code>"
+    ],
+    correct: 1,
+    explanation: "<code>--key cosign.key</code> uses a locally generated key pair instead of Fulcio's OIDC-based ephemeral certificate. <code>--tlog-upload=false</code> skips writing the signature record to the Rekor public transparency log. Together these keep signing entirely within your private infrastructure — no external network calls, no public audit trail."
+  },
+  {
+    phase: "Phase 5 · Scanning & Signing",
+    q: "Your GitLab CI pipeline has a <code>sign</code> job that runs after <code>scan</code>. The scan job fails due to a critical CVE. Does the <code>sign</code> job run?",
+    options: [
+      "Yes — jobs in later stages always run unless explicitly cancelled",
+      "Yes — the sign job uses <code>when: always</code> so it is not affected by upstream failures",
+      "No — GitLab CI skips all subsequent stages when an earlier stage fails, so the vulnerable image is never signed",
+      "No — but only if the pipeline has <code>allow_failure: false</code> on the scan job"
+    ],
+    correct: 2,
+    explanation: "GitLab CI's default behaviour is to stop a pipeline when a job fails. The <code>sign</code> job depends on <code>scan</code> via <code>needs:</code>. If <code>scan</code> fails, <code>sign</code> is skipped — the vulnerable image never receives a signature. This is the security property the pipeline is designed to enforce: no signature on an image that has not passed the security gate."
+  },
+
+  // ── Phase 6 — Registry & Lifecycle ───────────────────────────────────────
+  {
+    phase: "Phase 6 · Registry & Image Lifecycle",
+    q: "You use <code>crane copy</code> to promote an image from staging to production. What is the key advantage over <code>docker pull + docker tag + docker push</code>?",
+    options: [
+      "<code>crane copy</code> re-signs the image automatically during promotion",
+      "<code>crane copy</code> is a server-side operation — it copies the manifest and layers between registry paths without downloading bytes to the runner, preserving the original digest",
+      "<code>crane copy</code> works across different registry vendors; docker pull/push does not",
+      "<code>crane copy</code> creates an immutable copy; docker tag creates a mutable alias"
+    ],
+    correct: 1,
+    explanation: "<code>crane copy</code> instructs the registry to copy the manifest and any missing layers internally — the runner never downloads the image. This is faster, uses no runner bandwidth, and critically: the digest is preserved. <code>docker pull + docker tag + docker push</code> re-uploads bytes and can produce a different digest if the daemon applies any metadata transformations."
+  },
+  {
+    phase: "Phase 6 · Registry & Image Lifecycle",
+    q: "You deploy exclusively with immutable SHA tags (<code>:sha-a1b2c3d</code>). A teammate argues that <code>:latest</code> should be removed from the pipeline entirely. What is the strongest argument <em>for</em> keeping <code>:latest</code>?",
+    options: [
+      "<code>:latest</code> is required by GitLab Container Registry — it cannot be removed",
+      "Automated tools like Renovate and some Kubernetes operators use <code>:latest</code> as the default pull target",
+      "<code>:latest</code> is a human convenience tag — it makes <code>docker pull nexio-api</code> work without specifying a digest, useful for local development and demos",
+      "<code>:latest</code> is needed for rollback — you can re-tag it to a previous SHA"
+    ],
+    correct: 2,
+    explanation: "In production, all deployments should reference immutable SHA tags. <code>:latest</code> is a mutable convenience tag for humans — it makes local development frictionless (<code>docker run registry.gitlab.com/org/nexio-api</code> just works) and simplifies README examples. The key rule: <em>deploy with SHA, pull with :latest locally</em>. Never use <code>:latest</code> in a Kubernetes manifest or CI deploy step."
+  },
+  {
+    phase: "Phase 6 · Registry & Image Lifecycle",
+    q: "GitLab's registry cleanup policy has <code>name_regex: sha-.*</code> and <code>keep_n: 10</code>. You have 50 SHA-tagged images. What happens?",
+    options: [
+      "All 50 SHA-tagged images are deleted immediately",
+      "The 10 most recent SHA-tagged images are kept; the older 40 are scheduled for deletion",
+      "Nothing — cleanup policies only run manually, not automatically",
+      "The policy fails because <code>sha-.*</code> is not a valid regex in GitLab"
+    ],
+    correct: 1,
+    explanation: "<code>keep_n: 10</code> retains the 10 most recently pushed images matching the regex. The remaining 40 older SHA tags are marked for deletion and removed on the next scheduled cleanup run (typically within 24 hours). This prevents unbounded registry growth while keeping a rolling window of recent builds for rollback."
+  },
+
+  // ── Phase 7 — Runtime Security ────────────────────────────────────────────
+  {
+    phase: "Phase 7 · Runtime Security",
+    q: "You run a container with <code>--cap-drop ALL --cap-add NET_BIND_SERVICE</code>. The app then tries to <code>chown</code> a file. What happens?",
+    options: [
+      "The chown succeeds — file ownership is managed by the kernel, not capabilities",
+      "The chown fails with <code>Operation not permitted</code> — <code>CHOWN</code> is a capability that was dropped with <code>ALL</code> and not re-added",
+      "The container exits immediately — dropping ALL capabilities terminates the process",
+      "The chown succeeds only if the file is in <code>/tmp</code>"
+    ],
+    correct: 1,
+    explanation: "<code>CAP_CHOWN</code> is the Linux capability that allows a process to change file ownership. <code>--cap-drop ALL</code> removes it. Because it was not listed in <code>--cap-add</code>, the chown syscall returns <code>EPERM</code>. This is the fail-closed design: start with no capabilities and grant only what the application actually needs — nothing more."
+  },
+  {
+    phase: "Phase 7 · Runtime Security",
+    q: "You add <code>--read-only</code> to a container. The app writes session data to <code>/tmp</code> and crashes. What is the minimal fix that maintains the security intent?",
+    options: [
+      "Remove <code>--read-only</code> — the filesystem must be writable for the app to function",
+      "Mount a writable volume at <code>/tmp</code>: <code>--tmpfs /tmp:size=64m,noexec</code>",
+      "Add <code>--cap-add SYS_WRITE</code> to grant write permissions",
+      "Set <code>--read-only=false</code> only for the <code>/tmp</code> directory"
+    ],
+    correct: 1,
+    explanation: "<code>--tmpfs</code> mounts a temporary in-memory filesystem at the specified path, which is writable. Adding <code>noexec</code> prevents binaries written to <code>/tmp</code> from being executed — an attacker who writes a payload cannot run it. This is the standard pattern: <code>--read-only</code> on the root filesystem plus <code>--tmpfs /tmp:noexec</code> for legitimate temp writes."
+  },
+  {
+    phase: "Phase 7 · Runtime Security",
+    q: "A seccomp profile sets <code>\"defaultAction\": \"SCMP_ACT_ERRNO\"</code>. An unlisted syscall is called. What happens, and why is this safer than <code>SCMP_ACT_KILL</code>?",
+    options: [
+      "The process is killed immediately — same as SCMP_ACT_KILL, the name is just an alias",
+      "The syscall returns an error to the calling process. The process can handle the error and continue — making it easier to diagnose missing allowlist entries without crashing the container",
+      "The syscall is allowed but logged — ERRNO is the permissive mode",
+      "The container pauses and waits for operator approval before proceeding"
+    ],
+    correct: 1,
+    explanation: "<code>SCMP_ACT_ERRNO</code> returns <code>EPERM</code> to the process. The application can catch this error, log it, and often continue running. <code>SCMP_ACT_KILL</code> terminates the process immediately with no error message — if a legitimate syscall is missing from your allowlist, the container just dies with no useful diagnostic. Start with <code>ERRNO</code> during development to catch gaps, switch to <code>KILL</code> only when the allowlist is proven complete."
+  },
+
+  // ── Phase 8 — Advanced Compose ────────────────────────────────────────────
+  {
+    phase: "Phase 8 · Advanced Compose",
+    q: "You have a <code>docker-compose.override.yml</code> in your repo. A CI pipeline runs <code>docker compose up -d</code>. What happens?",
+    options: [
+      "The override file is ignored — CI environments do not load override files automatically",
+      "Docker Compose automatically merges <code>docker-compose.override.yml</code> into the base config when both files are present, even in CI — potentially leaking dev settings into production",
+      "The pipeline fails because multiple Compose files require the <code>-f</code> flag to be set explicitly",
+      "The override is loaded only if the <code>COMPOSE_FILE</code> environment variable lists it"
+    ],
+    correct: 1,
+    explanation: "Docker Compose automatically merges <code>docker-compose.override.yml</code> whenever it exists in the working directory — no flags needed. This is intentional for local development (volume mounts, debug ports, relaxed resource limits) but dangerous in CI or production if the override file is committed to the repo. The fix: use explicit <code>-f</code> flags in CI (<code>docker compose -f docker-compose.yml -f docker-compose.prod.yml up</code>) to be precise about which files are loaded."
+  },
+  {
+    phase: "Phase 8 · Advanced Compose",
+    q: "A service has <code>profiles: [debug]</code> in the Compose file. You run <code>docker compose up</code>. Does the service start?",
+    options: [
+      "Yes — all services start by default unless <code>replicas: 0</code> is set",
+      "No — services with profiles only start when you explicitly activate the profile with <code>docker compose --profile debug up</code>",
+      "Yes — profiles are only evaluated on <code>docker compose down</code>",
+      "No — but the service is created in a stopped state and must be started manually"
+    ],
+    correct: 1,
+    explanation: "Compose profiles let you define optional services (debuggers, admin UIs, test databases) that are excluded from the default <code>docker compose up</code>. Only services with no profile, or whose profile is explicitly activated via <code>--profile</code>, are started. This keeps the development stack lean while making it easy to spin up extras when needed."
+  },
+
+  // ── Phase 9 — Container-Native Design ────────────────────────────────────
+  {
+    phase: "Phase 9 · Container-Native Design",
+    q: "Your container receives a SIGTERM from the orchestrator during a rolling deploy. The app does not handle it and exits immediately. What is the consequence?",
+    options: [
+      "None — Kubernetes waits for all in-flight requests to complete regardless of the signal handler",
+      "In-flight HTTP requests are dropped mid-response, causing errors for clients connected at the moment of termination",
+      "The container is restarted immediately instead of being replaced",
+      "The orchestrator sends SIGKILL instead after a 1-second timeout"
+    ],
+    correct: 1,
+    explanation: "When a container exits on SIGTERM without draining, any request being processed at that instant is interrupted — the client receives a connection reset or partial response. Kubernetes gives the container <code>terminationGracePeriodSeconds</code> (default 30s) between SIGTERM and SIGKILL. A proper signal handler catches SIGTERM, stops accepting new connections, waits for active requests to finish, then exits cleanly."
+  },
+  {
+    phase: "Phase 9 · Container-Native Design",
+    q: "You combine the liveness and readiness probes into one endpoint: <code>/health</code> checks both process health and database connectivity. During a transient database hiccup the probe fails. What happens?",
+    options: [
+      "Nothing — Kubernetes treats liveness and readiness failures identically",
+      "The pod is removed from the load balancer (readiness failure) and then restarted (liveness failure) — even though the app process is perfectly healthy, causing unnecessary restarts",
+      "Only the liveness probe triggers a restart; readiness is advisory and does not affect the pod",
+      "Kubernetes waits for both probes to fail three times before taking action"
+    ],
+    correct: 1,
+    explanation: "Liveness and readiness must be separate. Readiness failure removes the pod from traffic rotation — correct behaviour during a transient DB blip. Liveness failure restarts the container — incorrect for a healthy process waiting for its dependency. Conflating them means a 30-second DB timeout triggers a pod restart, which doesn't fix the database and adds unnecessary churn. The rule: liveness = is the process alive? Readiness = can it serve requests right now?"
+  },
+  {
+    phase: "Phase 9 · Container-Native Design",
+    q: "You need to deploy the same image to dev, staging, and production with different database URLs and log levels. Which approach aligns with the 12-factor app principle?",
+    options: [
+      "Build three separate images — one per environment — with the config baked in via <code>ENV</code> instructions",
+      "Mount environment-specific config files (<code>/etc/nexio/config.yaml</code>) or inject values via environment variables at runtime — one image, config varies per environment",
+      "Use a <code>.env</code> file committed to the repository with a <code>ENVIRONMENT=</code> variable the app reads at startup",
+      "Hardcode production values as defaults and override them with feature flags for dev and staging"
+    ],
+    correct: 1,
+    explanation: "12-factor factor III: config. Config that varies between environments (URLs, credentials, feature flags) must live outside the image — in environment variables or mounted config files. Baking config into the image means building three images that are semantically identical except for a string — now you have three artifacts to scan, sign, and promote instead of one. One build, infinite deployments."
+  },
+
+  // ── Phase 10 — Capstone ───────────────────────────────────────────────────
+  {
+    phase: "Phase 10 · Capstone Pipeline",
+    q: "Your pipeline has <code>scan: needs: [build]</code> and <code>sign: needs: [build, scan]</code>. The scan job fails. Which jobs still run?",
+    options: [
+      "All jobs run — <code>needs:</code> controls ordering but not execution",
+      "Only the <code>summary</code> job runs, with <code>when: always</code>",
+      "No subsequent jobs run — <code>sign</code> is blocked because <code>scan</code> failed, preventing a vulnerable image from ever being signed",
+      "The pipeline retries <code>scan</code> three times before blocking <code>sign</code>"
+    ],
+    correct: 2,
+    explanation: "<code>needs:</code> creates an explicit dependency graph. When <code>scan</code> fails, <code>sign</code> — which lists <code>scan</code> in its <code>needs:</code> — is skipped automatically. This is the core security invariant: an image cannot be signed unless it passed the security gate. The only exception is <code>summary</code>, which uses <code>optional: true</code> on its needs so it always runs to report results."
+  },
+  {
+    phase: "Phase 10 · Capstone Pipeline",
+    q: "The root <code>.gitlab-ci.yml</code> has a <code>workflow: rules:</code> block. A developer pushes a branch that already has an open merge request. How many pipelines run?",
+    options: [
+      "Two — one branch pipeline and one merge request pipeline run in parallel",
+      "One — the <code>workflow: rules:</code> block matches the <code>merge_request_event</code> source first and prevents the redundant branch pipeline from starting",
+      "Zero — workflow rules block all pipelines when a merge request is open",
+      "Two, but the branch pipeline is automatically cancelled when the MR pipeline starts"
+    ],
+    correct: 1,
+    explanation: "Without <code>workflow: rules:</code>, GitLab runs a branch pipeline AND a merge request pipeline for the same commit — doubling CI costs. The <code>workflow: rules:</code> block controls which pipeline sources are allowed. By matching <code>merge_request_event</code> and not matching a plain branch push (when an MR exists), it ensures only one pipeline runs per commit. This is the standard pattern for all GitLab repositories."
+  },
+  {
+    phase: "Phase 10 · Capstone Pipeline",
+    q: "You push a semver tag <code>v1.2.0</code>. According to the capstone pipeline, which image tags are pushed to the registry?",
+    options: [
+      "Only <code>:v1.2.0</code>",
+      "<code>:sha-&lt;short-sha&gt;</code>, <code>:v1.2.0</code>, and <code>:1.2</code>",
+      "<code>:sha-&lt;short-sha&gt;</code>, <code>:v1.2.0</code>, <code>:1.2</code>, and <code>:latest</code>",
+      "<code>:v1.2.0</code> and <code>:latest</code> only"
+    ],
+    correct: 1,
+    explanation: "The build job computes tags based on context: the SHA tag is always pushed; on a semver tag push the full version (<code>:v1.2.0</code>) and the minor alias (<code>:1.2</code>) are added. <code>:latest</code> is only pushed on merges to <code>main</code>, not on tag pushes — this avoids <code>:latest</code> being overwritten by a hotfix tag pushed out of chronological order. All three tags point to the same digest."
+  }
+
+];
+
+let current = 0, score = 0, answered = false;
+const results = [];
+
+function render() {
+  const card    = document.getElementById('quizCard');
+  const bar     = document.getElementById('progressBar');
+  const counter = document.getElementById('questionCounter');
+  if (current >= questions.length) { renderScore(); return; }
+  const q = questions[current];
+  answered = false;
+  bar.style.width = `${(current / questions.length) * 100}%`;
+  counter.textContent = `${current + 1} / ${questions.length}`;
+  card.innerHTML = `
+    <div class="phase-label">${q.phase}</div>
+    <div class="question">${q.q}</div>
+    <div class="options" id="options">
+      ${q.options.map((opt, i) => `
+        <div class="option" data-index="${i}" onclick="select(${i})">
+          <div class="option-key">${String.fromCharCode(65 + i)}</div>
+          <div class="option-text">${opt}</div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function select(chosen) {
+  if (answered) return;
+  answered = true;
+  const q = questions[current];
+  const options = document.querySelectorAll('.option');
+  options.forEach((el, i) => {
+    el.classList.add('disabled');
+    if (i === q.correct) el.classList.add('correct');
+    else if (i === chosen) el.classList.add('wrong');
+    else el.classList.add('dimmed');
+  });
+  const isCorrect = chosen === q.correct;
+  if (isCorrect) score++;
+  results.push(isCorrect);
+  const exp = document.createElement('div');
+  exp.className = 'explanation';
+  exp.innerHTML = (isCorrect ? '✓ Correct. ' : '✗ Not quite. ') + q.explanation;
+  document.getElementById('options').after(exp);
+  const btn = document.createElement('button');
+  btn.className = 'btn-next';
+  btn.textContent = current < questions.length - 1 ? 'Next question →' : 'See my results';
+  btn.onclick = () => { current++; render(); };
+  exp.after(btn);
+}
+
+function renderScore() {
+  const card = document.getElementById('quizCard');
+  document.getElementById('progressBar').style.width = '100%';
+  document.getElementById('questionCounter').textContent = '';
+  const pct = Math.round((score / questions.length) * 100);
+  let msg, sub;
+  if (pct === 100) { msg = 'Perfect score.'; sub = 'Every concept from every phase. Ship it.'; }
+  else if (pct >= 80) { msg = 'Strong work.'; sub = 'You have a solid grasp of the full lab. Review the questions you missed and you\'re ready for production.'; }
+  else if (pct >= 60) { msg = 'Good foundation.'; sub = 'A few gaps to close. Re-read the phases you missed and try again.'; }
+  else if (pct >= 40) { msg = 'Getting there.'; sub = 'Go back through the READMEs for the phases you struggled with. The concepts will click.'; }
+  else { msg = 'Keep going.'; sub = 'Start from Phase 0 and work through each README. Every concept in this quiz comes directly from the lab.'; }
+  const wrongCount = questions.length - score;
+  card.innerHTML = `
+    <div class="score-screen">
+      <div class="score-circle">
+        <div class="score-number">${score}</div>
+        <div class="score-total">/ ${questions.length}</div>
+      </div>
+      <div class="score-title">${msg}</div>
+      <div class="score-subtitle">${sub}</div>
+      <div class="score-breakdown">
+        <span class="score-tag correct">✓ ${score} correct</span>
+        <span class="score-tag wrong">✗ ${wrongCount} wrong</span>
+      </div>
+      <button class="btn-restart" onclick="restart()">Try again</button>
+      <a class="btn-back" href="README.md">Back to lab</a>
+    </div>
+  `;
+}
+
+function restart() { current = 0; score = 0; answered = false; results.length = 0; render(); }
+render();
+</script>
+</body>
+</html>
